@@ -22,6 +22,7 @@ import java.util.HashMap;
 
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueLong;
+import org.lealone.orm.Model;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -46,19 +47,18 @@ public class PLong<R> extends PBaseNumber<R, Long> {
         super(name, root);
     }
 
-    /**
-     * Construct with additional path prefix.
-     */
-    public PLong(String name, R root, String prefix) {
-        super(name, root, prefix);
+    private PLong<R> P(Model<?> model) {
+        return this.<PLong<R>> getModelProperty(model);
     }
 
     public R set(long value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).set(value);
+        }
         if (!areEqual(this.value, value)) {
             this.value = value;
-            // if (isReady()) {
             expr().set(name, ValueLong.get(value));
-            // }
         }
         return root;
     }
@@ -69,6 +69,10 @@ public class PLong<R> extends PBaseNumber<R, Long> {
     }
 
     public final long get() {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).get();
+        }
         return value;
     }
 
@@ -90,7 +94,7 @@ public class PLong<R> extends PBaseNumber<R, Long> {
 
     @Override
     public R deserialize(HashMap<String, Value> map) {
-        Value v = map.get(name);
+        Value v = map.get(getFullName());
         if (v != null) {
             value = v.getLong();
         }

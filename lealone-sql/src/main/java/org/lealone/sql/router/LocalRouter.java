@@ -50,8 +50,7 @@ public class LocalRouter implements Router {
     }
 
     @Override
-    public int createDatabase(Database db, ServerSession currentSession) {
+    public int executeDatabaseStatement(Database db, ServerSession currentSession, StatementBase statement) {
         return 0;
     }
-
 }

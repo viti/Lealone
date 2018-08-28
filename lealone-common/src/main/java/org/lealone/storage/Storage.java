@@ -18,6 +18,7 @@
 package org.lealone.storage;
 
 import java.util.Map;
+import java.util.Set;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.RunMode;
@@ -42,8 +43,18 @@ public interface Storage {
 
     boolean isClosed();
 
-    public default void move(String[] targetEndpoints, RunMode runMode) {
-        throw DbException.getUnsupportedException("move");
+    Set<String> getMapNames();
+
+    public default void replicate(Object dbObject, String[] newReplicationEndpoints, RunMode runMode) {
+        throw DbException.getUnsupportedException("replicate");
     }
 
+    public default void sharding(Object dbObject, String[] oldEndpoints, String[] newEndpoints, RunMode runMode) {
+        throw DbException.getUnsupportedException("sharding");
+    }
+
+    public default void drop() {
+    }
+
+    StorageMap<?, ?> getMap(String name);
 }

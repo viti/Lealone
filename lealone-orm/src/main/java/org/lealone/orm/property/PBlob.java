@@ -25,8 +25,4 @@ public class PBlob<R> extends ModelProperty<R> {
         super(name, root);
     }
 
-    public PBlob(String name, R root, String prefix) {
-        super(name, root, prefix);
-    }
-
 }

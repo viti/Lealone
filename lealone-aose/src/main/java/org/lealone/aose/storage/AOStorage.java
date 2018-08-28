@@ -20,18 +20,33 @@ package org.lealone.aose.storage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import org.lealone.aose.router.P2pRouter;
+import org.lealone.aose.server.P2pServer;
 import org.lealone.aose.storage.btree.BTreeMap;
 import org.lealone.aose.storage.rtree.RTreeMap;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
 import org.lealone.common.util.IOUtils;
+import org.lealone.db.DataBuffer;
+import org.lealone.db.Database;
+import org.lealone.db.LealoneDatabase;
 import org.lealone.db.RunMode;
+import org.lealone.db.Session;
+import org.lealone.db.value.ValueString;
+import org.lealone.net.NetEndpoint;
+import org.lealone.replication.ReplicationSession;
 import org.lealone.storage.StorageBase;
+import org.lealone.storage.StorageCommand;
 import org.lealone.storage.StorageMap;
 import org.lealone.storage.fs.FilePath;
 import org.lealone.storage.fs.FileUtils;
@@ -167,14 +182,81 @@ public class AOStorage extends StorageBase {
         out.closeEntry();
     }
 
-    @Override
-    public void move(String[] targetEndpoints, RunMode runMode) {
-        for (StorageMap<?, ?> map : maps.values()) {
-            map = map.getRawMap();
-            if (map instanceof BTreeMap) {
-                ((BTreeMap<?, ?>) map).move(targetEndpoints, runMode);
-            }
+    private List<NetEndpoint> getReplicationEndpoints(String[] replicationHostIds) {
+        return getReplicationEndpoints(Arrays.asList(replicationHostIds));
+    }
+
+    private List<NetEndpoint> getReplicationEndpoints(List<String> replicationHostIds) {
+        int size = replicationHostIds.size();
+        List<NetEndpoint> replicationEndpoints = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            replicationEndpoints
+                    .add(P2pServer.instance.getTopologyMetaData().getEndpointForHostId(replicationHostIds.get(i)));
         }
+        return replicationEndpoints;
+    }
+
+    @Override
+    public void replicate(Object dbObject, String[] newReplicationEndpoints, RunMode runMode) {
+        replicateRootPages(dbObject, null, newReplicationEndpoints, runMode);
+    }
+
+    @Override
+    public void sharding(Object dbObject, String[] oldEndpoints, String[] newEndpoints, RunMode runMode) {
+        replicateRootPages(dbObject, oldEndpoints, newEndpoints, runMode);
+    }
+
+    private void replicateRootPages(Object dbObject, String[] oldEndpoints, String[] targetEndpoints, RunMode runMode) {
+        AOStorageService.forceMerge();
+
+        List<NetEndpoint> replicationEndpoints = getReplicationEndpoints(targetEndpoints);
+        // 用最高权限的用户移动页面，因为目标节点上可能还没有对应的数据库
+        Session session = LealoneDatabase.getInstance().createInternalSession();
+        ReplicationSession rs = P2pRouter.createReplicationSession(session, replicationEndpoints);
+        Database db = (Database) dbObject;
+        int id = db.getId();
+        String sysMapName = "t_" + id + "_0";
+        try (DataBuffer p = DataBuffer.create(); StorageCommand c = rs.createStorageCommand()) {
+            HashMap<String, StorageMap<?, ?>> maps = new HashMap<>(this.maps);
+            Collection<StorageMap<?, ?>> values = maps.values();
+            p.putInt(values.size());
+            // SYS表放在前面，并且总是使用CLIENT_SERVER模式
+            StorageMap<?, ?> sysMap = maps.remove(sysMapName);
+            replicateRootPage(db, sysMap, p, oldEndpoints, RunMode.CLIENT_SERVER);
+            for (StorageMap<?, ?> map : values) {
+                replicateRootPage(db, map, p, oldEndpoints, runMode);
+            }
+            ByteBuffer pageBuffer = p.getAndFlipBuffer();
+            c.movePage(db.getShortName(), "", pageBuffer);
+        }
+    }
+
+    private void replicateRootPage(Database db, StorageMap<?, ?> map, DataBuffer p, String[] oldEndpoints,
+            RunMode runMode) {
+        map = map.getRawMap();
+        if (map instanceof BTreeMap) {
+            String mapName = map.getName();
+            ValueString.type.write(p, mapName);
+
+            BTreeMap<?, ?> btreeMap = (BTreeMap<?, ?>) map;
+            btreeMap.setOldEndpoints(oldEndpoints);
+            btreeMap.setDatabase(db);
+            btreeMap.setRunMode(runMode);
+            btreeMap.replicateRootPage(p);
+        }
+    }
+
+    @Override
+    public void drop() {
+        close();
+        String storageName = (String) config.get("storageName");
+        FileUtils.deleteRecursive(storageName, false);
+    }
+
+    @Override
+    public void save() {
+        AOStorageService.forceMerge();
+        super.save();
     }
 
 }

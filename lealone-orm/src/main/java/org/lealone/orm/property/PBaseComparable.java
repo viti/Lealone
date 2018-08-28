@@ -17,6 +17,8 @@
  */
 package org.lealone.orm.property;
 
+import org.lealone.orm.Model;
+
 /**
  * Base property for all comparable types. 
  *
@@ -36,11 +38,8 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
         super(name, root);
     }
 
-    /**
-     * Construct with additional path prefix.
-     */
-    public PBaseComparable(String name, R root, String prefix) {
-        super(name, root, prefix);
+    private PBaseComparable<R, T> P(Model<?> model) {
+        return this.<PBaseComparable<R, T>> getModelProperty(model);
     }
 
     // ---- range comparisons -------
@@ -51,6 +50,10 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
      * @return the root model bean instance
      */
     public final R gt(T value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).gt(value);
+        }
         expr().gt(name, value);
         return root;
     }
@@ -62,6 +65,10 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
      * @return the root model bean instance
      */
     public final R ge(T value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).ge(value);
+        }
         expr().ge(name, value);
         return root;
     }
@@ -73,6 +80,10 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
      * @return the root model bean instance
      */
     public final R lt(T value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).lt(value);
+        }
         expr().lt(name, value);
         return root;
     }
@@ -84,6 +95,10 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
      * @return the root model bean instance
      */
     public final R le(T value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).le(value);
+        }
         expr().le(name, value);
         return root;
     }
@@ -96,51 +111,11 @@ public abstract class PBaseComparable<R, T extends Comparable> extends PBaseValu
      * @return the root model bean instance
      */
     public final R between(T lower, T upper) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).between(lower, upper);
+        }
         expr().between(name, lower, upper);
-        return root;
-    }
-
-    /**
-     * Greater than.
-     *
-     * @param value the bind value
-     * @return the root model bean instance
-     */
-    public final R greaterThan(T value) {
-        expr().gt(name, value);
-        return root;
-    }
-
-    /**
-     * Greater than or Equal to.
-     *
-     * @param value the bind value
-     * @return the root model bean instance
-     */
-    public final R greaterOrEqualTo(T value) {
-        expr().ge(name, value);
-        return root;
-    }
-
-    /**
-     * Less than.
-     *
-     * @param value the bind value
-     * @return the root model bean instance
-     */
-    public final R lessThan(T value) {
-        expr().lt(name, value);
-        return root;
-    }
-
-    /**
-     * Less than or Equal to.
-     *
-     * @param value the bind value
-     * @return the root model bean instance
-     */
-    public final R lessOrEqualTo(T value) {
-        expr().le(name, value);
         return root;
     }
 

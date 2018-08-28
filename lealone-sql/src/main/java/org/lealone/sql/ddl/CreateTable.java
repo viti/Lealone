@@ -7,6 +7,7 @@
 package org.lealone.sql.ddl;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
@@ -17,6 +18,8 @@ import org.lealone.common.util.New;
 import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
+import org.lealone.db.constraint.Constraint;
+import org.lealone.db.constraint.ConstraintReferential;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.Sequence;
 import org.lealone.db.table.Column;
@@ -163,6 +166,7 @@ public class CreateTable extends SchemaStatement {
             }
             table.setComment(comment);
             table.setPackageName(packageName);
+            table.setCodePath(codePath);
             if (isSessionTemporary) {
                 if (onCommitDrop) {
                     table.setOnCommitDrop(true);
@@ -200,7 +204,7 @@ public class CreateTable extends SchemaStatement {
             }
 
             if (genCode)
-                genCode();
+                genCode(session, table, table, 1);
         }
         return 0;
     }
@@ -336,9 +340,21 @@ public class CreateTable extends SchemaStatement {
         return codePath;
     }
 
-    private void genCode() {
+    private static void genCode(ServerSession session, Table table, Table owner, int level) {
+        String packageName = table.getPackageName();
+        String tableName = table.getName();
+        Schema schema = table.getSchema();
+        for (Constraint constraint : table.getConstraints()) {
+            if (constraint instanceof ConstraintReferential) {
+                ConstraintReferential ref = (ConstraintReferential) constraint;
+                Table refTable = ref.getRefTable();
+                if (refTable != table && level <= 1) { // 避免递归
+                    genCode(session, refTable, owner, ++level);
+                }
+            }
+        }
         boolean databaseToUpper = session.getDatabase().getSettings().databaseToUpper;
-        String className = CreateService.toClassName(data.tableName);
+        String className = CreateService.toClassName(tableName);
         StringBuilder buff = new StringBuilder();
         StringBuilder fields = new StringBuilder();
         StringBuilder fieldNames = new StringBuilder();
@@ -354,7 +370,28 @@ public class CreateTable extends SchemaStatement {
         importSet.add("com.fasterxml.jackson.databind.annotation.JsonSerialize");
         importSet.add(packageName + "." + className + "." + className + "Deserializer");
 
-        for (Column c : data.columns) {
+        for (Constraint constraint : table.getConstraints()) {
+            if (constraint instanceof ConstraintReferential) {
+                ConstraintReferential ref = (ConstraintReferential) constraint;
+                Table refTable = ref.getRefTable();
+                owner = ref.getTable();
+                if (refTable == table) {
+                    String pn = owner.getPackageName();
+                    if (!packageName.equals(pn)) {
+                        importSet.add(pn + "." + CreateService.toClassName(owner.getName()));
+                    }
+                    importSet.add(List.class.getName());
+                    importSet.add(ArrayList.class.getName());
+                } else {
+                    String pn = refTable.getPackageName();
+                    if (!packageName.equals(pn)) {
+                        importSet.add(pn + "." + CreateService.toClassName(refTable.getName()));
+                    }
+                }
+            }
+        }
+
+        for (Column c : table.getColumns()) {
             int type = c.getType();
             String modelPropertyClassName = getModelPropertyClassName(type, importSet);
             String columnName = CamelCaseHelper.toCamelFromUnderscore(c.getName());
@@ -379,7 +416,7 @@ public class CreateTable extends SchemaStatement {
         }
         buff.append("\r\n");
         buff.append("/**\r\n");
-        buff.append(" * Model for table '").append(data.tableName).append("'.\r\n");
+        buff.append(" * Model for table '").append(tableName).append("'.\r\n");
         buff.append(" *\r\n");
         buff.append(" * THIS IS A GENERATED OBJECT, DO NOT MODIFY THIS CLASS.\r\n");
         buff.append(" */\r\n");
@@ -392,23 +429,101 @@ public class CreateTable extends SchemaStatement {
         buff.append("    public static final ").append(className).append(" dao = new ").append(className)
                 .append("(null, ROOT_DAO);\r\n");
         buff.append("\r\n");
-        Database db = data.schema.getDatabase();
-        String tableFullName = "\"" + db.getName() + "\", \"" + data.schema.getName() + "\", \"" + data.tableName
-                + "\"";
+        Database db = schema.getDatabase();
+        String tableFullName = "\"" + db.getName() + "\", \"" + schema.getName() + "\", \"" + tableName + "\"";
         if (db.getSettings().databaseToUpper) {
             tableFullName = tableFullName.toUpperCase();
         }
-        buff.append("    public static ").append(className).append(" create(String url) {\r\n");
-        buff.append("        ModelTable t = new ModelTable(url, ").append(tableFullName).append(");\r\n");
-        buff.append("        return new ").append(className).append("(t, REGULAR_MODEL);\r\n");
-        buff.append("    }\r\n");
-        buff.append("\r\n");
+        // buff.append(" public static ").append(className).append(" create(String url) {\r\n");
+        // buff.append(" ModelTable t = new ModelTable(url, ").append(tableFullName).append(");\r\n");
+        // buff.append(" return new ").append(className).append("(t, REGULAR_MODEL);\r\n");
+        // buff.append(" }\r\n");
+        // buff.append("\r\n");
         buff.append(fields);
+        // buff.append("\r\n");
+
+        StringBuilder listBuff = new StringBuilder();
+        StringBuilder newAssociateInstanceBuff = new StringBuilder();
+        int mVar = 0;
+        for (Constraint constraint : table.getConstraints()) {
+            if (constraint instanceof ConstraintReferential) {
+                ConstraintReferential ref = (ConstraintReferential) constraint;
+                Table refTable = ref.getRefTable();
+                owner = ref.getTable();
+                String refTableClassName = CreateService.toClassName(refTable.getName());
+                if (refTable == table) {
+                    mVar++;
+                    String ownerClassName = CreateService.toClassName(owner.getName());
+
+                    listBuff.append("    public ").append(className).append(" add").append(ownerClassName).append("(")
+                            .append(ownerClassName).append(" m) {\r\n");
+                    listBuff.append("        m.set").append(refTableClassName).append("(this);\r\n");
+                    listBuff.append("        super.addModel(m);;\r\n");
+                    listBuff.append("        return this;\r\n");
+                    listBuff.append("    }\r\n");
+                    listBuff.append("\r\n");
+                    listBuff.append("    public ").append(className).append(" add").append(ownerClassName).append("(")
+                            .append(ownerClassName).append("... mArray) {\r\n");
+                    listBuff.append("        for (").append(ownerClassName).append(" m : mArray)\r\n");
+                    listBuff.append("            add").append(ownerClassName).append("(m);\r\n");
+                    listBuff.append("        return this;\r\n");
+                    listBuff.append("    }\r\n");
+                    listBuff.append("\r\n");
+                    listBuff.append("    public List<").append(ownerClassName).append("> get").append(ownerClassName)
+                            .append("List() {\r\n");
+                    listBuff.append("        return super.getModelList(").append(ownerClassName).append(".class);\r\n");
+                    listBuff.append("    }\r\n");
+                    listBuff.append("\r\n");
+                    // newAssociateInstanceBuff.append(" @Override\r\n");
+                    // newAssociateInstanceBuff.append(" protected ").append(ownerClassName)
+                    // .append(" newAssociateInstance() {\r\n");
+                    // newAssociateInstanceBuff.append(" ").append(ownerClassName).append(" m = new ")
+                    // .append(ownerClassName).append("();\r\n");
+                    // newAssociateInstanceBuff.append(" add").append(ownerClassName).append("(m);\r\n");
+                    // newAssociateInstanceBuff.append(" return m;\r\n");
+                    // newAssociateInstanceBuff.append(" }\r\n");
+                    // newAssociateInstanceBuff.append("\r\n");
+
+                    String m = "m" + mVar;
+                    newAssociateInstanceBuff.append("        ").append(ownerClassName).append(" ").append(m)
+                            .append(" = new ").append(ownerClassName).append("();\r\n");
+                    newAssociateInstanceBuff.append("        add").append(ownerClassName).append("(").append(m)
+                            .append(");\r\n");
+                    newAssociateInstanceBuff.append("        list.add").append("(").append(m).append(");\r\n");
+                } else {
+                    String refTableVar = CamelCaseHelper.toCamelFromUnderscore(refTable.getName());
+
+                    buff.append("    private ").append(refTableClassName).append(" ").append(refTableVar)
+                            .append(";\r\n");
+                    listBuff.append("    public ").append(refTableClassName).append(" get").append(refTableClassName)
+                            .append("() {\r\n");
+                    listBuff.append("        return ").append(refTableVar).append(";\r\n");
+                    listBuff.append("    }\r\n");
+                    listBuff.append("\r\n");
+                    listBuff.append("    public ").append(className).append(" set").append(refTableClassName)
+                            .append("(").append(refTableClassName).append(" ").append(refTableVar).append(") {\r\n");
+                    listBuff.append("        this.").append(refTableVar).append(" = ").append(refTableVar)
+                            .append(";\r\n");
+
+                    IndexColumn[] refColumns = ref.getRefColumns();
+                    IndexColumn[] columns = ref.getColumns();
+                    for (int i = 0; i < columns.length; i++) {
+                        String columnName = CamelCaseHelper.toCamelFromUnderscore(columns[i].column.getName());
+                        String refColumnName = CamelCaseHelper.toCamelFromUnderscore(refColumns[i].column.getName());
+                        listBuff.append("        this.").append(columnName).append(".set(").append(refTableVar)
+                                .append(".").append(refColumnName).append(".get());\r\n");
+                    }
+                    listBuff.append("        return this;\r\n");
+                    listBuff.append("    }\r\n");
+                    listBuff.append("\r\n");
+                }
+            }
+        }
+
         buff.append("\r\n");
         buff.append("    public ").append(className).append("() {\r\n");
         buff.append("        this(null, REGULAR_MODEL);\r\n");
         buff.append("    }\r\n");
-        buff.append("\r\n");
         buff.append("\r\n");
         buff.append("    private ").append(className).append("(ModelTable t, short modelType) {\r\n");
         buff.append("        super(t == null ? new ModelTable(").append(tableFullName).append(") : t, modelType);\r\n");
@@ -418,11 +533,21 @@ public class CreateTable extends SchemaStatement {
         buff.append("        super.setModelProperties(new ModelProperty[] { ").append(fieldNames).append(" });\r\n");
         buff.append("    }\r\n");
         buff.append("\r\n");
+        buff.append(listBuff);
         buff.append("    @Override\r\n");
         buff.append("    protected ").append(className).append(" newInstance(ModelTable t, short modelType) {\r\n");
         buff.append("        return new ").append(className).append("(t, modelType);\r\n");
         buff.append("    }\r\n");
         buff.append("\r\n");
+        if (newAssociateInstanceBuff.length() > 0) {
+            buff.append("    @Override\r\n");
+            buff.append("    protected List<Model<?>> newAssociateInstances() {\r\n");
+            buff.append("        ArrayList<Model<?>> list = new ArrayList<>();\r\n");
+            buff.append(newAssociateInstanceBuff);
+            buff.append("        return list;\r\n");
+            buff.append("    }\r\n");
+            buff.append("\r\n");
+        }
         buff.append("    static class ").append(className).append("Deserializer extends ModelDeserializer<")
                 .append(className).append("> {\r\n");
         buff.append("        @Override\r\n");
@@ -433,7 +558,7 @@ public class CreateTable extends SchemaStatement {
         buff.append("}\r\n");
         // System.out.println(buff);
 
-        CreateService.writeFile(codePath, packageName, className, buff);
+        CreateService.writeFile(table.getCodePath(), packageName, className, buff);
     }
 
     private static final String TYPE_QUERY_PACKAGE_NAME = "org.lealone.orm.property";

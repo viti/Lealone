@@ -77,11 +77,17 @@ public abstract class StorageBase implements Storage {
         return closed;
     }
 
+    @Override
     public Set<String> getMapNames() {
         return new HashSet<String>(maps.keySet());
     }
 
     public void closeMap(String name) {
         maps.remove(name);
+    }
+
+    @Override
+    public StorageMap<?, ?> getMap(String name) {
+        return maps.get(name);
     }
 }

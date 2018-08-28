@@ -216,6 +216,7 @@ public class BTreeStorage {
             for (long pos : removedPages) {
                 chunkMetaData.writeLong(pos);
             }
+            chunkMetaData.writeInt(hashCodeToHostIdMap.size());
             for (String hostId : hashCodeToHostIdMap.values()) {
                 chunkMetaData.writeUTF(hostId);
             }
@@ -350,7 +351,9 @@ public class BTreeStorage {
             throw DataUtils.newIllegalStateException(DataUtils.ERROR_FILE_CORRUPT, "Position 0");
         } else if (ref != null && pos < 0) {
             String hostId = findHostId(pos);
-            return readRemotePage(ref, hostId);
+            BTreePage p = readRemotePage(ref, hostId);
+            ref.page = p;
+            return p;
         }
 
         // BTreePage p = cache == null ? null : cache.get(pos);
@@ -674,7 +677,7 @@ public class BTreeStorage {
         }
     }
 
-    // //////////////////////////////// Compact BEGIN /////////////////////////////////////
+    // //////////////////////////////// Compact BEGIN ///////////////////////////////////
     /**
      * Try to increase the fill rate by re-writing partially full chunks. 
      * Chunks with a low number of live items are re-written.
@@ -825,7 +828,8 @@ public class BTreeStorage {
     }
 
     void addHostIds(Collection<String> hostIds) {
-        addHostIds(hostIds.toArray(new String[0]));
+        if (hostIds != null)
+            addHostIds(hostIds.toArray(new String[0]));
     }
 
     void addHostIds(String... hostIds) {

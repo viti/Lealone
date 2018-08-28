@@ -2,6 +2,8 @@ package org.lealone.test.generated.model;
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import java.util.ArrayList;
+import java.util.List;
 import org.lealone.orm.Model;
 import org.lealone.orm.ModelDeserializer;
 import org.lealone.orm.ModelProperty;
@@ -23,11 +25,6 @@ public class Customer extends Model<Customer> {
 
     public static final Customer dao = new Customer(null, ROOT_DAO);
 
-    public static Customer create(String url) {
-        ModelTable t = new ModelTable(url, "TEST", "PUBLIC", "CUSTOMER");
-        return new Customer(t, REGULAR_MODEL);
-    }
-
     public final PLong<Customer> id;
     public final PString<Customer> name;
     public final PString<Customer> notes;
@@ -36,7 +33,6 @@ public class Customer extends Model<Customer> {
     public Customer() {
         this(null, REGULAR_MODEL);
     }
-
 
     private Customer(ModelTable t, short modelType) {
         super(t == null ? new ModelTable("TEST", "PUBLIC", "CUSTOMER") : t, modelType);
@@ -49,9 +45,53 @@ public class Customer extends Model<Customer> {
         super.setModelProperties(new ModelProperty[] { this.id, this.name, this.notes, this.phone });
     }
 
+    public Customer addCustomerAddress(CustomerAddress m) {
+        m.setCustomer(this);
+        super.addModel(m);;
+        return this;
+    }
+
+    public Customer addCustomerAddress(CustomerAddress... mArray) {
+        for (CustomerAddress m : mArray)
+            addCustomerAddress(m);
+        return this;
+    }
+
+    public List<CustomerAddress> getCustomerAddressList() {
+        return super.getModelList(CustomerAddress.class);
+    }
+
+    public Customer addOrder(Order m) {
+        m.setCustomer(this);
+        super.addModel(m);;
+        return this;
+    }
+
+    public Customer addOrder(Order... mArray) {
+        for (Order m : mArray)
+            addOrder(m);
+        return this;
+    }
+
+    public List<Order> getOrderList() {
+        return super.getModelList(Order.class);
+    }
+
     @Override
     protected Customer newInstance(ModelTable t, short modelType) {
         return new Customer(t, modelType);
+    }
+
+    @Override
+    protected List<Model<?>> newAssociateInstances() {
+        ArrayList<Model<?>> list = new ArrayList<>();
+        CustomerAddress m1 = new CustomerAddress();
+        addCustomerAddress(m1);
+        list.add(m1);
+        Order m2 = new Order();
+        addOrder(m2);
+        list.add(m2);
+        return list;
     }
 
     static class CustomerDeserializer extends ModelDeserializer<Customer> {

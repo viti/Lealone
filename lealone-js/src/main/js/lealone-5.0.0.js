@@ -108,20 +108,58 @@ function initSockJS(sockjsUrl) {
     };
 }
 
+L.syncRequestUrl = "/_lealone_sync_request_";
+
+function executeSqlSync(command) {
+    var xhr = new XMLHttpRequest();
+//    xhr.timeout = 3000;
+//    xhr.ontimeout = function (event) {
+//        console.log("XMLHttpRequest timeout: " + command);
+//    }
+    var formData = new FormData();
+    formData.append('command', command);
+    xhr.open('POST', L.syncRequestUrl, false);
+    xhr.send(formData);
+    
+    var data =  xhr.responseText;
+    var a = JSON.parse(data);
+    var type = a[0];
+    var serviceName = a[1]; 
+    var result = a[2];
+    switch(type) {
+    case 2: // 正常返回
+        //如果有回调就执行它
+        if(L.services && L.services[serviceName] && L.services[serviceName]["callback"]) { 
+            L.services[serviceName]["callback"](result);
+        }
+        break;
+    case 3: // error info
+        console.log("failed to call service: " + serviceName + ", backend error: " + result)
+        break;
+    case 500:
+    case 501:
+    case 502:
+    case 503:
+    case 504:
+    case 601:
+    case 602:
+    case 603:
+        if(L.sqls && L.sqls[a[1]] && L.sqls[a[1]]["callback"]) { 
+            L.sqls[a[1]]["callback"](result);
+        }
+        break;
+    default:
+        console.log("unknown response type: " + type + ", serviceName: " + serviceName + ", data: " + e.data)
+    }
+    return result;
+}
+
 var id = 0;
 L.executeSql = function(type, sql, args, callback) {
     id++;
-    if(!L.sockjs) {
-        L.sqls = {};
-        initSockJS(L.sockjsUrl);
-    }
     var msg = type + ";" + id;
     if(sql != null && sql != undefined) {
         msg += ";" + sql; 
-    }
-    if(typeof callback == 'function') {
-        L.sqls[id] = function() {};
-        L.sqls[id]["callback"] = callback; 
     }
     if(args) {
         msg += ";[";
@@ -133,6 +171,17 @@ L.executeSql = function(type, sql, args, callback) {
         }
         msg += "]";
     }
+    if(!callback) {
+        return executeSqlSync(msg);
+    }
+    if(!L.sockjs) {
+        L.sqls = {};
+        initSockJS(L.sockjsUrl);
+    }
+    if(typeof callback == 'function') {
+        L.sqls[id] = function() {};
+        L.sqls[id]["callback"] = callback; 
+    }
     if(L.sockjsReady)
         L.sockjs.send(msg);
     else {
@@ -141,7 +190,9 @@ L.executeSql = function(type, sql, args, callback) {
         } 
         L.penddingMsgs.push(msg);
     }
+    return null;
 };
+
 L.sockjsUrl = "/_lealone_sockjs_";
 return {
     setSockjsUrl: function(url) { L.sockjsUrl = url },
@@ -186,17 +237,36 @@ function setPrivateProperties(object, properties) {
 class Model {
     constructor(modelTable, modelType) {
         this.modelTable = modelTable;
-        this.modelType = modelType;
+        this.modelType = modelType || REGULAR_MODEL;
         this.reset();
 
         // 避免第三方框架监控这些字段
         var properties = ["modelTable", "modelType", "modelProperties", "expressionBuilderStack",
                 "whereExpressionBuilder", "nvPairs", "selectExpressions", "groupExpressions", "having"];
         setPrivateProperties(this, properties);
+        
+        this["insert()"] = this.insert;
+        this["findList()"] = this.findList;
+
+        var cb = function(message) {
+            console.log(message);
+        }
+
+        this.insert.bindNode = function(node, model) {
+            node.addEventListener("click", function(){
+                model.insert(cb);
+            }, false);
+        }
+        this.findList.bindNode = function(node, model) {
+            node.addEventListener("click", function(){
+                model.findList(cb);
+            }, false);
+        }
     }
     
     reset() {
         this.modelProperties = [];
+        this.modelPropertyMap = new Map();
         this.expressionBuilderStack = null;
         this.whereExpressionBuilder = null;
         this.nvPairs = null;
@@ -215,6 +285,11 @@ class Model {
     
     setModelProperties(modelProperties) {
         this.modelProperties = modelProperties;
+    }
+    
+    addModelProperty(p) {
+        this.modelProperties.push(p);
+        this.modelPropertyMap.set(p.name, p);
     }
 
     stringify() {
@@ -249,11 +324,19 @@ class Model {
     }
     
     select() {
-        this.selectExpressions = arguments;
+        this.selectExpressions = [];
+        for(var i = 0; i < arguments.length; i++) {
+            this.selectExpressions.push(arguments[i]);
+        }
+        return this;
     }
 
     groupBy() {
-        this.groupExpressions = arguments;
+        this.groupExpressions = [];
+        for(var i = 0; i < arguments.length; i++) {
+            this.groupExpressions.push(arguments[i]);
+        }
+        return this;
     }
     
     findOne(cb) {
@@ -273,7 +356,7 @@ class Model {
         sql += " limit 1";
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(503, sql, args, cb)
+        return lealone.executeSql(503, sql, args, cb)
     }
 
     createSelect() {
@@ -300,17 +383,17 @@ class Model {
         return [sql, args];
     }
 
-    findList() {
+    findList(cb) {
         this.checkDao("findList");
         var select = this.createSelect();
         var sql = select[0];
         var args = select[1];
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(504, sql, args, cb)
+        return lealone.executeSql(504, sql, args, cb)
     }
 
-    findCount() {
+    findCount(cb) {
         this.checkDao("findCount");
         var args = [];
         var sql = "select count(*) from " + this.modelTable.tableName; 
@@ -320,7 +403,7 @@ class Model {
         }
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(503, sql, args, cb)
+        return lealone.executeSql(503, sql, args, cb)
     }
     
     getLocalStorageKey() {
@@ -366,8 +449,7 @@ class Model {
         sql += sqlValues + ")";
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(500, sql, args, cb)
-        return 0;
+        return lealone.executeSql(500, sql, args, cb);
     }
     
     update(cb) {
@@ -388,8 +470,7 @@ class Model {
         }
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(501, sql, args, cb)
-        return 0;
+        return lealone.executeSql(501, sql, args, cb);
     }
     
     delete(cb) {
@@ -416,8 +497,7 @@ class Model {
         }
         console.log("execute sql: " + sql);
         this.reset();
-        lealone.executeSql(502, sql, args, cb)
-        return 0;
+        return lealone.executeSql(502, sql, args, cb);
     }
     
     peekExprBuilder() {
@@ -438,6 +518,16 @@ class Model {
         }
         return this.whereExpressionBuilder;
     }
+    
+    and() {
+        this.peekExprBuilder().and();
+        return this;
+    }
+    
+    or() {
+        this.peekExprBuilder().or();
+        return this;
+    }
 
     beginTransaction(cb) {
         lealone.executeSql(601, null, null, cb);
@@ -449,6 +539,43 @@ class Model {
 
     rollbackTransaction(cb) {
         lealone.executeSql(603, null, null, cb);
+    }
+
+    defineProperty(p, name) { 
+        Object.defineProperty(this, name, {
+            enumerable: true,
+            configurable: true,
+            get: function(){
+                return p; // 如果返回 p.get()，那么不能再使用流式化风格，只能返回 p，然后在 ModelProperty类中添加 toString()方法
+            },
+            set: function(newValue){
+                p.set(newValue);
+            }
+        });
+    }
+
+    parse(jsonText) {
+        var model = this;
+        JSON.parse(jsonText, function(key, value) {
+            var p = model.modelPropertyMap.get(key);
+            if(p) {
+                return p.set(value);
+            }
+            return value;
+        });
+        return model;
+    }
+
+    bind(view) {
+        var node = document.querySelector("#" + view);
+        var iterator = document.createNodeIterator(node, NodeFilter.SHOW_ALL, null, false);
+        var node = iterator.nextNode();
+        while (node !== null) {
+            if(this[node.id]) {
+                this[node.id].bindNode(node, this);
+            }
+            node = iterator.nextNode();
+        }
     }
 }
 
@@ -470,6 +597,8 @@ class ModelProperty {
         this.value = "";
         this.model = model;
         setPrivateProperties(this, ["name", "value", "model"]);
+        model.addModelProperty(this);
+        model.defineProperty(this, name.toLowerCase());
     }
     
     get() {
@@ -488,8 +617,8 @@ class ModelProperty {
         return this.model;
     }
     
-    eq(value) {
-        this.expr().eq(this.name, value);
+    eq(value, useLast) {
+        this.expr().eq(this.name, value, useLast);
         return this.model;
     }
     
@@ -499,6 +628,20 @@ class ModelProperty {
     
     expr() {
         return this.model.peekExprBuilder();
+    }
+
+    bindNode(node, model) {
+        this.node = node;
+        if(node.nodeType == 1) {
+            var that = this;
+            node.addEventListener("keyup", function(){
+                if(model.isDao()) {
+                    that.eq(this.value, true);
+                } else {
+                    that.set(this.value);
+                }
+            }, false);
+        }
     }
 }
 class PString extends ModelProperty {
@@ -536,6 +679,7 @@ class ExpressionBuilder {
         this.expression = null;
         this.orderList = [];
         this.values = [];
+        this.kv = new Map();
     }
     setAnd(isAnd) {
         this.isAnd = isAnd;
@@ -586,11 +730,22 @@ class ExpressionBuilder {
         return this;
     }
 
-    eq(propertyName, value) {
+    eq(propertyName, value, useLast) {
         if(value instanceof ModelProperty) {
             this.setRootExpression(propertyName + " = " + modelProperty.getFullName());
         } else {
-            this.addExpression(propertyName, value, "=");
+            if(useLast) {
+                var v = this.kv.get(propertyName);
+                if(v) {
+                    this.values.pop();
+                    this.values.push(value);
+                } else {
+                    this.addExpression(propertyName, value, "=");
+                    this.kv.set(propertyName, value);
+                }
+            } else {
+                this.addExpression(propertyName, value, "=");
+            }
         }
         return this;
     }
@@ -743,3 +898,37 @@ class ExpressionBuilder {
 
 }
 
+lealone.bind = function(viewModelPairs) {
+    
+    var createNodeIterator = function(node) {
+        return document.createNodeIterator(node, NodeFilter.SHOW_ALL, null, false);;
+    }
+    
+    var subIterator = function(topIterator, node, model) {
+        var iterator = createNodeIterator(node);
+        var node = iterator.nextNode();
+        var topNode = null;
+        while (node !== null) {
+            if(model[node.id]) {
+                model[node.id].bindNode(node, model);
+            }
+            node = iterator.nextNode();
+            topNode = topIterator.nextNode();
+        }
+        return topNode;
+    }
+
+    //var views = Object.keys(viewModelPairs);
+    //console.log(views);
+    var iterator = createNodeIterator(document.body);
+    var node = iterator.nextNode();
+    while (node !== null) {
+        //console.log(node.id);
+        if(viewModelPairs[node.id]) {
+            var model = viewModelPairs[node.id];
+            node = subIterator(iterator, node, model);
+            continue;
+        }
+        node = iterator.nextNode();
+    }
+}

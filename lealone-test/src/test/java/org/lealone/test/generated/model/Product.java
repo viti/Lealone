@@ -23,11 +23,6 @@ public class Product extends Model<Product> {
 
     public static final Product dao = new Product(null, ROOT_DAO);
 
-    public static Product create(String url) {
-        ModelTable t = new ModelTable(url, "TEST", "PUBLIC", "PRODUCT");
-        return new Product(t, REGULAR_MODEL);
-    }
-
     public final PLong<Product> productId;
     public final PString<Product> productName;
     public final PString<Product> category;
@@ -36,7 +31,6 @@ public class Product extends Model<Product> {
     public Product() {
         this(null, REGULAR_MODEL);
     }
-
 
     private Product(ModelTable t, short modelType) {
         super(t == null ? new ModelTable("TEST", "PUBLIC", "PRODUCT") : t, modelType);

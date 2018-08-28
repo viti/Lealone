@@ -18,6 +18,7 @@
 package org.lealone.sql.router;
 
 import org.lealone.db.Database;
+import org.lealone.db.RunMode;
 import org.lealone.db.ServerSession;
 import org.lealone.db.result.Result;
 import org.lealone.sql.StatementBase;
@@ -30,6 +31,20 @@ public interface Router {
 
     String[] getHostIds(Database db);
 
-    int createDatabase(Database db, ServerSession currentSession);
+    int executeDatabaseStatement(Database db, ServerSession currentSession, StatementBase statement);
 
+    default void replicate(Database db, RunMode oldRunMode, RunMode newRunMode, String[] newReplicationEndpoints) {
+    }
+
+    default String[] getReplicationEndpoints(Database db) {
+        return new String[0];
+    }
+
+    default void sharding(Database db, RunMode oldRunMode, RunMode newRunMode, String[] oldEndpoints,
+            String[] newEndpoints) {
+    }
+
+    default String[] getShardingEndpoints(Database db) {
+        return new String[0];
+    }
 }

@@ -1,7 +1,8 @@
 
 ### Lealone是什么
-
+* 是一个全栈开发平台
 * 是一个兼具RDBMS、NoSQL优点的面向[OLTP](http://en.wikipedia.org/wiki/Online_transaction_processing)场景的异步化NewSQL单机与分布式关系数据库
+* 是一个支持单机和分布式场景的服务平台
 
 
 ### Lealone有哪些特性
@@ -26,6 +27,10 @@
 
 * 从[H2数据库](http://www.h2database.com/html/main.html)借鉴了大量成熟的代码和思想
 
+* 支持通过CREATE SERVICE创建可托管的后端服务
+
+* 内置前后端ORM框架
+
 
 ##### 企业版本
 
@@ -35,6 +40,7 @@
 
 * 支持强一致性复制
 
+* 支持不停机快速手动或自动转换运行模式(Client/Server模式 -> 复制模式 -> Sharding模式)
 
 
 ### Lealone文档

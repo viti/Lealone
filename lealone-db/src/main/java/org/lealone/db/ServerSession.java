@@ -6,6 +6,7 @@
  */
 package org.lealone.db;
 
+import java.nio.ByteBuffer;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -1171,8 +1172,14 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     }
 
     public String getURL(String hostId) {
-        if (connectionInfo == null)
-            return null;
+        if (connectionInfo == null) {
+            String dbName = database.getShortName();
+            String url = createURL(dbName, hostId);
+            connectionInfo = new ConnectionInfo(url, dbName);
+            connectionInfo.setUserName(user.getName());
+            connectionInfo.setUserPasswordHash(user.getUserPasswordHash());
+            return url;
+        }
         StringBuilder buff = new StringBuilder();
         String url = connectionInfo.getURL();
         int pos1 = url.indexOf("//") + 2;
@@ -1338,6 +1345,23 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     public StorageMap<Object, Object> getStorageMap(String mapName) {
         TransactionEngine transactionEngine = database.getTransactionEngine();
         return (StorageMap<Object, Object>) transactionEngine.getTransactionMap(mapName).getInstance(getTransaction());
+    }
+
+    @Override
+    public void addRootPages(String dbName, ByteBuffer rootPages) {
+        Database database = LealoneDatabase.getInstance().getDatabase(dbName);
+        if (!database.isInitialized()) {
+            database.init();
+        }
+        int size = rootPages.getInt();
+        for (int i = 0; i < size; i++) {
+            String mapName = ValueString.type.read(rootPages);
+            StorageMap<?, ?> map = database.getStorageMap(mapName);
+            map.addLeafPage(null, rootPages);
+            if (i == 0) {
+                database = database.copy();
+            }
+        }
     }
 
     private SessionStatus sessionStatus = SessionStatus.NO_TRANSACTION;

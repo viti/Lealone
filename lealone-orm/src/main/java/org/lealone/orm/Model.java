@@ -73,8 +73,9 @@ public abstract class Model<T> {
     private static final Logger logger = LoggerFactory.getLogger(Model.class);
 
     private static final ConcurrentSkipListMap<Long, ServerSession> currentSessions = new ConcurrentSkipListMap<>();
+    private static final ConcurrentSkipListMap<Integer, List<ServerSession>> sessionMap = new ConcurrentSkipListMap<>();
 
-    public class PRowId extends PBaseNumber<T, Long> {
+    private class PRowId extends PBaseNumber<T, Long> {
 
         private long value;
 
@@ -88,13 +89,6 @@ public abstract class Model<T> {
             super(name, root);
         }
 
-        /**
-         * Construct with additional path prefix.
-         */
-        public PRowId(String name, T root, String prefix) {
-            super(name, root, prefix);
-        }
-
         // 不需要通过外部设置
         T set(long value) {
             if (!areEqual(this.value, value)) {
@@ -106,7 +100,7 @@ public abstract class Model<T> {
 
         @Override
         public final T deserialize(HashMap<String, Value> map) {
-            Value v = map.get(name);
+            Value v = map.get(getFullName());
             if (v != null) {
                 value = v.getLong();
             }
@@ -119,7 +113,7 @@ public abstract class Model<T> {
 
     }
 
-    public static class NVPair {
+    private static class NVPair {
         public final String name;
         public final Value value;
 
@@ -156,7 +150,7 @@ public abstract class Model<T> {
     }
 
     @SuppressWarnings("unchecked")
-    public final PRowId _rowid_ = new PRowId(Column.ROWID, (T) this);
+    private final PRowId _rowid_ = new PRowId(Column.ROWID, (T) this);
 
     private final ModelTable modelTable;
 
@@ -178,10 +172,14 @@ public abstract class Model<T> {
     private ArrayStack<ExpressionBuilder<T>> expressionBuilderStack;
 
     private ArrayStack<TableFilter> tableFilterStack;
+    private HashMap<String, ModelProperty> modelPropertiesMap;
 
     ModelProperty[] modelProperties;
     // 0: regular model; 1: root dao; 2: child dao
     short modelType;
+
+    private ArrayList<Model<?>> modelList;
+    private HashMap<Class, ArrayList<Model<?>>> modelMap;
 
     protected Model(ModelTable table, short modelType) {
         this.modelTable = table;
@@ -198,6 +196,14 @@ public abstract class Model<T> {
 
     protected void setModelProperties(ModelProperty[] modelProperties) {
         this.modelProperties = modelProperties;
+        modelPropertiesMap = new HashMap<>(modelProperties.length);
+        for (ModelProperty p : modelProperties) {
+            modelPropertiesMap.put(p.getName(), p);
+        }
+    }
+
+    ModelProperty getModelProperty(String name) {
+        return modelPropertiesMap.get(name);
     }
 
     /**
@@ -205,6 +211,40 @@ public abstract class Model<T> {
      */
     protected void setRoot(T root) {
         this.root = root;
+    }
+
+    protected T addModel(Model<?> m) {
+        if (modelList == null) {
+            modelList = new ArrayList<>();
+        }
+        if (modelMap == null) {
+            modelMap = new HashMap<>();
+        }
+        ArrayList<Model<?>> list = modelMap.get(m.getClass());
+        if (list == null) {
+            list = new ArrayList<>();
+            modelMap.put(m.getClass(), list);
+        }
+        modelList.add(m);
+        list.add(m);
+        return root;
+    }
+
+    @SuppressWarnings("unchecked")
+    protected <M> List<M> getModelList(Class c) {
+        ArrayList<Model<?>> oldList = modelMap.get(c);
+        if (oldList == null) {
+            return null;
+        }
+        ArrayList<Model<?>> newList = new ArrayList<>(oldList.size());
+        HashMap<Long, Long> map = new HashMap<>(oldList.size());
+        for (Model<?> m : oldList) {
+            Long id = m._rowid_.get();
+            if (map.put(id, id) == null) {
+                newList.add(m);
+            }
+        }
+        return (List<M>) newList;
     }
 
     void addNVPair(String name, Value value) {
@@ -290,6 +330,11 @@ public abstract class Model<T> {
 
     static ExpressionColumn getExpressionColumn(ModelProperty<?> p) {
         return new ExpressionColumn(p.getDatabaseName(), p.getSchemaName(), p.getTableName(), p.getName());
+    }
+
+    static ExpressionColumn getExpressionColumn(TableFilter tableFilter, String propertyName) {
+        return new ExpressionColumn(tableFilter.getTable().getDatabase(), tableFilter.getSchemaName(),
+                tableFilter.getTableAlias(), propertyName);
     }
 
     ExpressionColumn getExpressionColumn(String propertyName) {
@@ -382,10 +427,12 @@ public abstract class Model<T> {
             return m.where();
         }
         if (tableFilterStack != null) {
-            ExpressionBuilder<T> on = getStack().pop();
-            TableFilter joined = getTableFilterStack().pop();
-            TableFilter top = getTableFilterStack().peek();
-            top.addJoin(joined, false, false, on.getExpression());
+            TableFilter first = tableFilterStack.first();
+            while (tableFilterStack.size() > 1) {
+                ExpressionBuilder<T> on = getStack().pop();
+                TableFilter joined = getTableFilterStack().pop();
+                first.addJoin(joined, false, false, on.getExpression());
+            }
         }
         return root;
     }
@@ -394,8 +441,21 @@ public abstract class Model<T> {
      * Execute the query returning either a single bean or null (if no matching bean is found).
      */
     public T findOne() {
+        return findOne(null);
+    }
+
+    public T findOne(Long tid) {
         checkDao("findOne");
-        Select select = createSelect();
+        // 进行关联查询时，主表取一条记录，但引用表要取多条
+        if (tableFilterStack != null && !tableFilterStack.isEmpty()) {
+            List<T> list = findList();
+            if (!list.isEmpty()) {
+                return list.get(0);
+            } else {
+                return null;
+            }
+        }
+        Select select = createSelect(tid);
         select.setLimit(ValueExpression.get(ValueInt.get(1)));
         select.init();
         select.prepare();
@@ -403,27 +463,37 @@ public abstract class Model<T> {
         Result result = select.executeQuery(1);
         result.next();
         reset();
-        return deserialize(result);
+        return deserialize(result, new HashMap<>(1), new ArrayList<>(1));
     }
 
-    private Select createSelect() {
-        Select select = new Select(modelTable.getSession());
+    private Select createSelect(Long tid) {
+        ServerSession session = getSession(tid);
+        Select select = new Select(session);
         TableFilter tableFilter;
         if (tableFilterStack != null && !tableFilterStack.isEmpty()) {
             tableFilter = tableFilterStack.peek();
             select.addTableFilter(tableFilter, true);
+            boolean selectExpressionsIsNull = false;
+            if (selectExpressions == null) {
+                selectExpressionsIsNull = true;
+                getSelectExpressions().add(new Wildcard(tableFilter.getSchemaName(), tableFilter.getTableAlias()));
+            }
+            selectExpressions.add(getExpressionColumn(tableFilter, Column.ROWID)); // 总是获取rowid
             while (tableFilter.getJoin() != null) {
                 select.addTableFilter(tableFilter.getJoin(), false);
                 tableFilter = tableFilter.getJoin();
+                if (selectExpressionsIsNull)
+                    selectExpressions.add(new Wildcard(tableFilter.getSchemaName(), tableFilter.getTableAlias()));
+                selectExpressions.add(getExpressionColumn(tableFilter, Column.ROWID)); // 总是获取rowid
             }
         } else {
-            tableFilter = new TableFilter(modelTable.getSession(), modelTable.getTable(), null, true, null);
+            tableFilter = new TableFilter(session, modelTable.getTable(), null, true, null);
             select.addTableFilter(tableFilter, true);
+            if (selectExpressions == null) {
+                getSelectExpressions().add(new Wildcard(null, null));
+            }
+            selectExpressions.add(getExpressionColumn(Column.ROWID)); // 总是获取rowid
         }
-        if (selectExpressions == null) {
-            getSelectExpressions().add(new Wildcard(null, null));
-        }
-        selectExpressions.add(getExpressionColumn(Column.ROWID)); // 总是获取rowid
         select.setExpressions(selectExpressions);
         if (whereExpressionBuilder != null)
             select.addCondition(whereExpressionBuilder.getExpression());
@@ -439,7 +509,7 @@ public abstract class Model<T> {
     }
 
     @SuppressWarnings("unchecked")
-    private T deserialize(Result result) {
+    private T deserialize(Result result, HashMap<Long, Model> models, ArrayList<T> list) {
         Value[] row = result.currentRow();
         if (row == null)
             return null;
@@ -447,20 +517,47 @@ public abstract class Model<T> {
         int len = row.length;
         HashMap<String, Value> map = new HashMap<>(len);
         for (int i = 0; i < len; i++) {
-            map.put(result.getColumnName(i), row[i]);
+            String key = result.getSchemaName(i) + "." + result.getTableName(i) + "." + result.getColumnName(i);
+            map.put(key, row[i]);
         }
 
         Model m = newInstance(modelTable, REGULAR_MODEL);
+
         if (m != null) {
-            for (ModelProperty p : m.modelProperties) {
-                p.deserialize(map);
-            }
             m._rowid_.deserialize(map);
+            Model old = models.get(m._rowid_.get());
+            if (old == null) {
+                models.put(m._rowid_.get(), m);
+                for (ModelProperty p : m.modelProperties) {
+                    p.deserialize(map);
+                }
+                list.add((T) m);
+            } else {
+                m = old;
+            }
         }
+        deserializeAssociateInstances(map, m.newAssociateInstances());
         return (T) m;
     }
 
+    @SuppressWarnings("unchecked")
+    private void deserializeAssociateInstances(HashMap<String, Value> map, List<Model<?>> associateModels) {
+        if (associateModels != null) {
+            for (Model associateModel : associateModels) {
+                for (ModelProperty p : associateModel.modelProperties) {
+                    p.deserialize(map);
+                }
+                associateModel._rowid_.deserialize(map);
+                deserializeAssociateInstances(map, associateModel.newAssociateInstances());
+            }
+        }
+    }
+
     protected Model newInstance(ModelTable t, short modelType) {
+        return null;
+    }
+
+    protected List<Model<?>> newAssociateInstances() {
         return null;
     }
 
@@ -474,16 +571,21 @@ public abstract class Model<T> {
      * Execute the query returning the list of objects.
      */
     public List<T> findList() {
+        return findList(null);
+    }
+
+    public List<T> findList(Long tid) {
         checkDao("findList");
-        Select select = createSelect();
+        Select select = createSelect(tid);
         select.init();
         select.prepare();
         logger.info("execute sql: " + select.getPlanSQL());
         Result result = select.executeQuery(-1);
         reset();
         ArrayList<T> list = new ArrayList<>(result.getRowCount());
+        HashMap<Long, Model> models = new HashMap<>(result.getRowCount());
         while (result.next()) {
-            list.add(deserialize(result));
+            deserialize(result, models, list);
         }
         return list;
     }
@@ -494,6 +596,15 @@ public abstract class Model<T> {
         if (m2 != this) {
             return m2.m(m);
         }
+        Model<T> old = (Model<T>) peekExprBuilder().getOldModel();
+        if (!old.isRootDao() && m.getClass() == old.getClass()) {
+            m = (Model<M>) old;
+        } else {
+            Model<M> m3 = m.maybeCopy();
+            if (m3 != m) {
+                m = m3;
+            }
+        }
         peekExprBuilder().setModel(m);
         m.pushExprBuilder((ExpressionBuilder<M>) peekExprBuilder());
         return m.root;
@@ -503,8 +614,12 @@ public abstract class Model<T> {
      * Return the count of entities this query should return.
      */
     public int findCount() {
+        return findCount(null);
+    }
+
+    public int findCount(Long tid) {
         checkDao("findCount");
-        Select select = createSelect();
+        Select select = createSelect(tid);
         select.setGroupQuery();
         getSelectExpressions().clear();
         Aggregate a = new Aggregate(Aggregate.COUNT_ALL, null, select, false);
@@ -519,18 +634,7 @@ public abstract class Model<T> {
         return result.currentRow()[0].getInt();
     }
 
-    public long insert() {
-        return insert(null);
-    }
-
-    public long insert(Long tid) {
-        // TODO 是否允许通过 XXX.dao来insert记录?
-        if (isDao()) {
-            String name = this.getClass().getSimpleName();
-            throw new UnsupportedOperationException("The insert operation is not allowed for " + name
-                    + ".dao,  please use new " + name + "().insert() instead.");
-        }
-
+    private ServerSession getSession(Long tid) {
         boolean autoCommit = false;
         ServerSession session;
         if (tid != null) {
@@ -544,6 +648,23 @@ public abstract class Model<T> {
         } else {
             autoCommit = false;
         }
+
+        session.setAutoCommit(autoCommit);
+        return session;
+    }
+
+    public long insert() {
+        return insert(null);
+    }
+
+    public long insert(Long tid) {
+        // TODO 是否允许通过 XXX.dao来insert记录?
+        if (isDao()) {
+            String name = this.getClass().getSimpleName();
+            throw new UnsupportedOperationException("The insert operation is not allowed for " + name
+                    + ".dao,  please use new " + name + "().insert() instead.");
+        }
+        ServerSession session = getSession(tid);
         Table dbTable = modelTable.getTable();
         Insert insert = new Insert(session);
         int size = nvPairs.size();
@@ -561,20 +682,30 @@ public abstract class Model<T> {
         insert.prepare();
         logger.info("execute sql: " + insert.getPlanSQL());
         insert.executeUpdate();
-        long rowId = modelTable.getSession().getLastRowKey();
+        long rowId = session.getLastRowKey();
         _rowid_.set(rowId);
 
-        if (autoCommit) {
+        if (session.isAutoCommit()) {
             session.commit();
+        }
+        if (modelList != null) {
+            for (Model<?> m : modelList) {
+                m.insert(tid);
+            }
         }
         reset();
         return rowId;
     }
 
     public int update() {
+        return update(null);
+    }
+
+    public int update(Long tid) {
+        ServerSession session = getSession(tid);
         Table dbTable = modelTable.getTable();
-        Update update = new Update(modelTable.getSession());
-        TableFilter tableFilter = new TableFilter(modelTable.getSession(), dbTable, null, true, null);
+        Update update = new Update(session);
+        TableFilter tableFilter = new TableFilter(session, dbTable, null, true, null);
         update.setTableFilter(tableFilter);
         checkWhereExpression(dbTable, "update");
         if (whereExpressionBuilder != null)
@@ -586,14 +717,21 @@ public abstract class Model<T> {
         reset();
         logger.info("execute sql: " + update.getPlanSQL());
         int count = update.executeUpdate();
-        commit();
+        if (session.isAutoCommit()) {
+            session.commit();
+        }
         return count;
     }
 
     public int delete() {
+        return delete(null);
+    }
+
+    public int delete(Long tid) {
+        ServerSession session = getSession(tid);
         Table dbTable = modelTable.getTable();
-        Delete delete = new Delete(modelTable.getSession());
-        TableFilter tableFilter = new TableFilter(modelTable.getSession(), dbTable, null, true, null);
+        Delete delete = new Delete(session);
+        TableFilter tableFilter = new TableFilter(session, dbTable, null, true, null);
         delete.setTableFilter(tableFilter);
         checkWhereExpression(dbTable, "delete");
         if (whereExpressionBuilder != null)
@@ -602,7 +740,9 @@ public abstract class Model<T> {
         reset();
         logger.info("execute sql: " + delete.getPlanSQL());
         int count = delete.executeUpdate();
-        commit();
+        if (session.isAutoCommit()) {
+            session.commit();
+        }
         return count;
     }
 
@@ -622,19 +762,12 @@ public abstract class Model<T> {
     }
 
     @SuppressWarnings("unchecked")
-    private Model<T> maybeCopy() {
+    Model<T> maybeCopy() {
         if (isRootDao()) {
-            Model m = newInstance(modelTable.copy(), CHILD_DAO);
-            return m;
+            return newInstance(modelTable.copy(), CHILD_DAO);
         } else {
             return this;
         }
-    }
-
-    // 支持并发
-    public T fork() {
-        checkDao("for");
-        return maybeCopy().root;
     }
 
     private void maybeCreateWhereExpression(Table dbTable) {
@@ -642,6 +775,8 @@ public abstract class Model<T> {
         if (_rowid_.get() != 0) {
             peekExprBuilder().eq(Column.ROWID, _rowid_.get());
         } else {
+            if (nvPairs == null)
+                return;
             Index primaryKey = dbTable.findPrimaryKey();
             if (primaryKey != null) {
                 for (Column c : primaryKey.getColumns()) {
@@ -659,10 +794,6 @@ public abstract class Model<T> {
                 }
             }
         }
-    }
-
-    private void commit() {
-        modelTable.getSession().commit();
     }
 
     private ArrayStack<ExpressionBuilder<T>> getStack() {
@@ -740,6 +871,7 @@ public abstract class Model<T> {
             return m2.join(m);
         }
         getTableFilterStack().push(m.createTableFilter());
+        m.tableFilterStack = getTableFilterStack();
         return root;
     }
 
@@ -761,14 +893,21 @@ public abstract class Model<T> {
         session.setAutoCommit(false);
         long tid = t.getTransactionId();
         currentSessions.put(tid, session);
+        int hash = getCurrentThreadHashCode();
+        List<ServerSession> sessions = sessionMap.get(hash);
+        if (sessions == null) {
+            sessions = new ArrayList<>();
+            sessionMap.put(hash, sessions);
+        }
+        sessions.add(session);
         return tid;
     }
 
     public void commitTransaction() {
         checkDao("commitTransaction");
-        ConcurrentSkipListMap.Entry<Long, ServerSession> e = currentSessions.pollLastEntry();
-        if (e != null) {
-            e.getValue().commit();
+        Long tid = getAndRemoveLastTransaction();
+        if (tid != null) {
+            commitTransaction(tid.longValue());
         }
     }
 
@@ -776,15 +915,16 @@ public abstract class Model<T> {
         checkDao("commitTransaction");
         ServerSession s = currentSessions.remove(tid);
         if (s != null) {
+            removeSession(tid);
             s.commit();
         }
     }
 
     public void rollbackTransaction() {
         checkDao("rollbackTransaction");
-        ConcurrentSkipListMap.Entry<Long, ServerSession> e = currentSessions.pollLastEntry();
-        if (e != null) {
-            e.getValue().rollback();
+        Long tid = getAndRemoveLastTransaction();
+        if (tid != null) {
+            rollbackTransaction(tid.longValue());
         }
     }
 
@@ -792,16 +932,54 @@ public abstract class Model<T> {
         checkDao("rollbackTransaction");
         ServerSession s = currentSessions.remove(tid);
         if (s != null) {
+            removeSession(tid);
             s.rollback();
         }
     }
 
     private ServerSession peekSession() {
-        ConcurrentSkipListMap.Entry<Long, ServerSession> e = currentSessions.firstEntry();
-        if (e != null)
-            return e.getValue();
-        else
+        int hash = getCurrentThreadHashCode();
+        List<ServerSession> sessions = sessionMap.get(hash);
+        if (sessions != null && !sessions.isEmpty()) {
+            return sessions.get(sessions.size() - 1);
+        } else {
             return null;
+        }
+    }
+
+    private void removeSession(long tid) {
+        int hash = getCurrentThreadHashCode();
+        List<ServerSession> sessions = sessionMap.get(hash);
+        if (sessions != null && !sessions.isEmpty()) {
+            int index = -1;
+            for (ServerSession s : sessions) {
+                index++;
+                if (s.getTransaction().getTransactionId() == tid) {
+                    break;
+                }
+            }
+            if (index > -1) {
+                sessions.remove(index);
+            }
+            if (sessions.isEmpty()) {
+                sessionMap.remove(hash);
+            }
+        }
+    }
+
+    private Long getAndRemoveLastTransaction() {
+        int hash = getCurrentThreadHashCode();
+        List<ServerSession> sessions = sessionMap.remove(hash);
+        Long tid = null;
+        if (sessions != null && !sessions.isEmpty()) {
+            ServerSession session = sessions.remove(sessions.size() - 1);
+            tid = Long.valueOf(session.getTransaction().getTransactionId());
+        }
+        return tid;
+    }
+
+    private int getCurrentThreadHashCode() {
+        return Thread.currentThread().hashCode();
     }
 
     /**
@@ -888,8 +1066,12 @@ public abstract class Model<T> {
             return list.size();
         }
 
-        public boolean contains(E o) {
-            return list.contains(o);
+        public E first() {
+            int len = list.size();
+            if (len == 0) {
+                throw new EmptyStackException();
+            }
+            return list.get(0);
         }
     }
 }

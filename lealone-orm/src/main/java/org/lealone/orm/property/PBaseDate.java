@@ -17,6 +17,8 @@
  */
 package org.lealone.orm.property;
 
+import org.lealone.orm.Model;
+
 /**
  * Base property for date and date time types.
  *
@@ -36,11 +38,8 @@ public abstract class PBaseDate<R, D extends Comparable> extends PBaseComparable
         super(name, root);
     }
 
-    /**
-     * Construct with additional path prefix.
-     */
-    public PBaseDate(String name, R root, String prefix) {
-        super(name, root, prefix);
+    private PBaseDate<R, D> P(Model<?> model) {
+        return this.<PBaseDate<R, D>> getModelProperty(model);
     }
 
     /**
@@ -50,6 +49,10 @@ public abstract class PBaseDate<R, D extends Comparable> extends PBaseComparable
      * @return the root model bean instance
      */
     public R after(D value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).after(value);
+        }
         expr().gt(name, value);
         return root;
     }
@@ -61,6 +64,10 @@ public abstract class PBaseDate<R, D extends Comparable> extends PBaseComparable
      * @return the root model bean instance
      */
     public R before(D value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).before(value);
+        }
         expr().lt(name, value);
         return root;
     }

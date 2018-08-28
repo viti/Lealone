@@ -37,6 +37,7 @@ public class User extends RightOwner {
     private byte[] salt;
     private byte[] passwordHash;
     private boolean admin;
+    private byte[] userPasswordHash;
 
     public User(Database database, int id, String userName, boolean systemUser) {
         super(database, id, userName, Trace.USER);
@@ -83,6 +84,11 @@ public class User extends RightOwner {
                 passwordHash = SHA256.getHashWithSalt(userPasswordHash, salt);
             }
         }
+        this.userPasswordHash = userPasswordHash;
+    }
+
+    public byte[] getUserPasswordHash() {
+        return userPasswordHash;
     }
 
     /**

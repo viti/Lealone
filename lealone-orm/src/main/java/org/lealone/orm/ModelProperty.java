@@ -32,10 +32,13 @@ import com.fasterxml.jackson.databind.JsonNode;
  *
  * @param <R> The type of the owning root bean
  */
+@SuppressWarnings("unchecked")
 public abstract class ModelProperty<R> {
 
     protected final String name;
     protected final R root;
+
+    protected String fullName;
 
     /**
      * Construct with a property name and root instance.
@@ -44,27 +47,20 @@ public abstract class ModelProperty<R> {
      * @param root the root model bean instance
      */
     public ModelProperty(String name, R root) {
-        this(name, root, null);
-    }
-
-    /**
-     * Construct with additional path prefix.
-     */
-    public ModelProperty(String name, R root, String prefix) {
+        this.name = name;
         this.root = root;
-        this.name = fullPath(prefix, name);
     }
 
     public String getDatabaseName() {
-        return getModel().getDatabaseName();
+        return ((Model<?>) root).getDatabaseName();
     }
 
     public String getSchemaName() {
-        return getModel().getSchemaName();
+        return ((Model<?>) root).getSchemaName();
     }
 
     public String getTableName() {
-        return getModel().getTableName();
+        return ((Model<?>) root).getTableName();
     }
 
     @Override
@@ -72,8 +68,16 @@ public abstract class ModelProperty<R> {
         return name;
     }
 
-    private Model<?> getModel() {
-        return ((Model<?>) root);
+    protected Model<?> getModel() {
+        return ((Model<?>) root).maybeCopy();
+    }
+
+    protected <P> P getModelProperty(Model<?> model) {
+        return (P) model.getModelProperty(name);
+    }
+
+    private ModelProperty<R> P(Model<?> model) {
+        return this.<ModelProperty<R>> getModelProperty(model);
     }
 
     /**
@@ -87,6 +91,10 @@ public abstract class ModelProperty<R> {
      * Is null.
      */
     public R isNull() {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).isNull();
+        }
         expr().isNull(name);
         return root;
     }
@@ -95,6 +103,10 @@ public abstract class ModelProperty<R> {
      * Is not null.
      */
     public R isNotNull() {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).isNotNull();
+        }
         expr().isNotNull(name);
         return root;
     }
@@ -103,6 +115,10 @@ public abstract class ModelProperty<R> {
      * Order by ascending on this property.
      */
     public R asc() {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).asc();
+        }
         expr().orderBy(name, false);
         return root;
     }
@@ -111,6 +127,10 @@ public abstract class ModelProperty<R> {
      * Order by descending on this property.
      */
     public R desc() {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).desc();
+        }
         expr().orderBy(name, true);
         return root;
     }
@@ -122,14 +142,27 @@ public abstract class ModelProperty<R> {
         return name;
     }
 
+    protected String getFullName() {
+        if (fullName == null) {
+            fullName = getSchemaName() + "." + getTableName() + "." + name;
+        }
+        return fullName;
+    }
+
     public final R eq(ModelProperty<?> p) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).eq(p);
+        }
         expr().eq(name, p);
         return root;
     }
 
-    // public abstract R set(Object value);
-
     public R set(Object value) {
+        Model<?> model = getModel();
+        if (model != root) {
+            return P(model).set(value);
+        }
         return root;
     }
 
@@ -156,7 +189,7 @@ public abstract class ModelProperty<R> {
     /**
      * Helper method to check if two objects are equal.
      */
-    @SuppressWarnings({ "unchecked", "rawtypes" })
+    @SuppressWarnings({ "rawtypes" })
     protected static boolean areEqual(Object obj1, Object obj2) {
         if (obj1 == null) {
             return (obj2 == null);
@@ -182,12 +215,5 @@ public abstract class ModelProperty<R> {
             return obj1.toString().equals(obj2.toString());
         }
         return obj1.equals(obj2);
-    }
-
-    /**
-     * Return the full path by adding the prefix to the property name (null safe).
-     */
-    protected static String fullPath(String prefix, String name) {
-        return (prefix == null) ? name : prefix + "." + name;
     }
 }

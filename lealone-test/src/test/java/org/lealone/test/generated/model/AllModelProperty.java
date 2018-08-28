@@ -38,11 +38,6 @@ public class AllModelProperty extends Model<AllModelProperty> {
 
     public static final AllModelProperty dao = new AllModelProperty(null, ROOT_DAO);
 
-    public static AllModelProperty create(String url) {
-        ModelTable t = new ModelTable(url, "TEST", "PUBLIC", "ALL_MODEL_PROPERTY");
-        return new AllModelProperty(t, REGULAR_MODEL);
-    }
-
     public final PInteger<AllModelProperty> f1;
     public final PBoolean<AllModelProperty> f2;
     public final PByte<AllModelProperty> f3;
@@ -68,7 +63,6 @@ public class AllModelProperty extends Model<AllModelProperty> {
     public AllModelProperty() {
         this(null, REGULAR_MODEL);
     }
-
 
     private AllModelProperty(ModelTable t, short modelType) {
         super(t == null ? new ModelTable("TEST", "PUBLIC", "ALL_MODEL_PROPERTY") : t, modelType);

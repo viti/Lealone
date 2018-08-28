@@ -19,6 +19,7 @@ package org.lealone.aose.router;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.Database;
+import org.lealone.db.RunMode;
 import org.lealone.db.ServerSession;
 import org.lealone.db.result.Result;
 import org.lealone.sql.StatementBase;
@@ -101,8 +102,28 @@ public class TransactionalRouter implements Router {
     }
 
     @Override
-    public int createDatabase(Database db, ServerSession currentSession) {
-        return nestedRouter.createDatabase(db, currentSession);
+    public int executeDatabaseStatement(Database db, ServerSession currentSession, StatementBase statement) {
+        return nestedRouter.executeDatabaseStatement(db, currentSession, statement);
     }
 
+    @Override
+    public void replicate(Database db, RunMode oldRunMode, RunMode newRunMode, String[] newReplicationEndpoints) {
+        nestedRouter.replicate(db, oldRunMode, newRunMode, newReplicationEndpoints);
+    }
+
+    @Override
+    public String[] getReplicationEndpoints(Database db) {
+        return nestedRouter.getReplicationEndpoints(db);
+    }
+
+    @Override
+    public void sharding(Database db, RunMode oldRunMode, RunMode newRunMode, String[] oldEndpoints,
+            String[] newEndpoints) {
+        nestedRouter.sharding(db, oldRunMode, newRunMode, oldEndpoints, newEndpoints);
+    }
+
+    @Override
+    public String[] getShardingEndpoints(Database db) {
+        return nestedRouter.getShardingEndpoints(db);
+    }
 }
