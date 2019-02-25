@@ -9,14 +9,12 @@ package org.lealone.sql.ddl;
 import java.util.ArrayList;
 import java.util.HashSet;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.db.Database;
 import org.lealone.db.DbObject;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.Right;
-import org.lealone.db.expression.ExpressionVisitor;
 import org.lealone.db.index.Index;
 import org.lealone.db.index.IndexType;
 import org.lealone.db.result.Result;
@@ -28,6 +26,7 @@ import org.lealone.db.table.TableView;
 import org.lealone.sql.SQLStatement;
 import org.lealone.sql.StatementBase;
 import org.lealone.sql.expression.Expression;
+import org.lealone.sql.expression.ExpressionVisitor;
 
 /**
  * This class represents the statements
@@ -210,7 +209,7 @@ public class AlterTableAlterColumn extends SchemaStatement {
         if (defaultExpression == null) {
             return;
         }
-        HashSet<DbObject> dependencies = New.hashSet();
+        HashSet<DbObject> dependencies = new HashSet<>();
         ExpressionVisitor visitor = ExpressionVisitor.getDependenciesVisitor(dependencies);
         defaultExpression.isEverything(visitor);
         if (dependencies.contains(table)) {
@@ -290,7 +289,7 @@ public class AlterTableAlterColumn extends SchemaStatement {
     private void addTableAlterHistoryRecords0() {
         Database db = session.getDatabase();
         Column[] columns = table.getColumns();
-        ArrayList<Column> newColumns = New.arrayList();
+        ArrayList<Column> newColumns = new ArrayList<>(columns.length);
         for (Column col : columns) {
             newColumns.add(col.getClone());
         }

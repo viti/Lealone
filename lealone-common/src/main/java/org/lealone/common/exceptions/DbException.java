@@ -6,8 +6,8 @@
  */
 package org.lealone.common.exceptions;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.sql.DriverManager;
@@ -17,11 +17,12 @@ import java.util.Locale;
 import java.util.Map.Entry;
 import java.util.Properties;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.util.SortedProperties;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Utils;
 import org.lealone.db.Constants;
+import org.lealone.db.SysProperties;
+import org.lealone.db.api.ErrorCode;
 
 /**
  * This exception wraps a checked exception.
@@ -38,24 +39,24 @@ public class DbException extends RuntimeException {
 
     static {
         try {
-            byte[] messages = Utils.getResource("/org/lealone/res/_messages_en.prop");
-            if (messages != null) {
-                MESSAGES.load(new ByteArrayInputStream(messages));
-            }
-            String language = Locale.getDefault().getLanguage();
-            if (!"en".equals(language)) {
-                byte[] translations = Utils.getResource("/org/lealone/res/_messages_" + language + ".prop");
-                // message: translated message + english
-                // (otherwise certain applications don't work)
-                if (translations != null) {
+            InputStream messages = Utils.getResourceAsStream(Constants.RESOURCES_DIR + "_messages_en.prop");
+            MESSAGES.load(messages);
+            if (SysProperties.USE_TRANSLATION_MESSAGE) {
+                String language = Locale.getDefault().getLanguage();
+                if (!"en".equals(language)) {
+                    byte[] translations = Utils
+                            .getResource(Constants.RESOURCES_DIR + "_messages_" + language + ".prop");
+                    // message: translated message + english
+                    // (otherwise certain applications don't work)
                     Properties p = SortedProperties.fromLines(new String(translations, Constants.UTF8));
                     for (Entry<Object, Object> e : p.entrySet()) {
                         String key = (String) e.getKey();
                         String translation = (String) e.getValue();
                         if (translation != null && !translation.startsWith("#")) {
-                            String original = MESSAGES.getProperty(key);
-                            String message = translation + "\n" + original;
-                            MESSAGES.put(key, message);
+                            // String original = MESSAGES.getProperty(key);
+                            // String message = translation + "\n" + original;
+                            // MESSAGES.put(key, message);
+                            MESSAGES.put(key, translation);
                         }
                     }
                 }

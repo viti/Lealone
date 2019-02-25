@@ -20,14 +20,16 @@ package org.lealone.db;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
+import org.lealone.common.exceptions.DbException;
 import org.lealone.db.result.Result;
 import org.lealone.db.value.ValueLong;
 import org.lealone.storage.LeafPageMovePlan;
+import org.lealone.storage.PageKey;
 import org.lealone.storage.StorageCommand;
 import org.lealone.storage.StorageMap;
 import org.lealone.transaction.Transaction;
 
-public class ServerCommand extends CommandBase implements StorageCommand {
+public class ServerCommand implements StorageCommand {
 
     private final ServerSession session;
 
@@ -90,21 +92,20 @@ public class ServerCommand extends CommandBase implements StorageCommand {
     }
 
     @Override
-    public void moveLeafPage(String mapName, ByteBuffer splitKey, ByteBuffer page) {
+    public void moveLeafPage(String mapName, PageKey pageKey, ByteBuffer page, boolean addPage) {
         StorageMap<Object, Object> map = session.getStorageMap(mapName);
-        map.addLeafPage(splitKey, page);
+        map.addLeafPage(pageKey, page, addPage);
     }
 
     @Override
-    public void movePage(String dbName, String mapName, ByteBuffer page) {
-        StorageMap<Object, Object> map = session.getStorageMap(mapName);
-        map.addLeafPage(null, page);
+    public void replicateRootPages(String dbName, ByteBuffer rootPages) {
+        session.replicateRootPages(dbName, rootPages);
     }
 
     @Override
-    public void removeLeafPage(String mapName, ByteBuffer key) {
-        StorageMap<Object, Object> map = session.getStorageMap(mapName);
-        map.removeLeafPage(key);
+    public void removeLeafPage(String mapName, PageKey pageKey) {
+        // 当前节点删除自己的 leaf page时不应该再触发自己再按 page key删一次
+        throw DbException.throwInternalError();
     }
 
     @Override

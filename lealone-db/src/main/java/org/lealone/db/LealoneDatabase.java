@@ -24,9 +24,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.db.value.CaseInsensitiveConcurrentHashMap;
+import org.lealone.common.util.CaseInsensitiveConcurrentHashMap;
+import org.lealone.db.api.ErrorCode;
 
 /**
  * 管理所有Database
@@ -56,6 +56,8 @@ public class LealoneDatabase extends Database {
 
         init();
         createRootUserIfNotExists();
+
+        DatabaseManager.setDatabases(databases);
     }
 
     public synchronized Database createEmbeddedDatabase(String name, ConnectionInfo ci) {

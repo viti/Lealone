@@ -15,13 +15,13 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.TreeSet;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.CamelCaseHelper;
-import org.lealone.common.util.New;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.Sequence;
 import org.lealone.db.schema.Service;
@@ -31,9 +31,9 @@ import org.lealone.db.table.Column;
 import org.lealone.db.table.CreateTableData;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.value.CaseInsensitiveMap;
 import org.lealone.db.value.DataType;
 import org.lealone.sql.SQLStatement;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents the statement
@@ -47,13 +47,13 @@ public class CreateService extends SchemaStatement {
     protected IndexColumn[] pkColumns;
     protected boolean ifNotExists;
 
-    private final ArrayList<DefineStatement> constraintCommands = New.arrayList();
+    private final ArrayList<DefinitionStatement> constraintCommands = new ArrayList<>();
     private boolean onCommitDrop;
     private boolean onCommitTruncate;
     private String comment;
     private String packageName;
     private String implementBy;
-    private final ArrayList<CreateTable> serviceMethods = New.arrayList();
+    private final ArrayList<CreateTable> serviceMethods = new ArrayList<>();
     private boolean genCode;
     private String codePath;
 
@@ -91,7 +91,7 @@ public class CreateService extends SchemaStatement {
      *
      * @param command the statement to add
      */
-    public void addConstraintCommand(DefineStatement command) {
+    public void addConstraintCommand(DefinitionStatement command) {
         if (command instanceof CreateIndex) {
             constraintCommands.add(command);
         } else {
@@ -155,7 +155,7 @@ public class CreateService extends SchemaStatement {
             service.setImplementBy(implementBy);
             service.setPackageName(packageName);
             Table table = getSchema().createTable(data);
-            ArrayList<Sequence> sequences = New.arrayList();
+            ArrayList<Sequence> sequences = new ArrayList<>();
             for (Column c : data.columns) {
                 if (c.isAutoIncrement()) {
                     int objId = getObjectId();
@@ -180,13 +180,14 @@ public class CreateService extends SchemaStatement {
                 db.addSchemaObject(session, table);
             }
             try {
+                TableFilter tf = new TableFilter(session, table, null, false, null);
                 for (Column c : data.columns) {
-                    c.prepareExpression(session);
+                    c.prepareExpression(session, tf);
                 }
                 for (Sequence sequence : sequences) {
                     table.addSequence(sequence);
                 }
-                for (DefineStatement command : constraintCommands) {
+                for (DefinitionStatement command : constraintCommands) {
                     command.update();
                 }
             } catch (DbException e) {

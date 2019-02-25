@@ -14,13 +14,12 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.api.Trigger;
 import org.lealone.common.exceptions.DbException;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.common.util.MathUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
+import org.lealone.common.util.Utils;
 import org.lealone.db.Constants;
 import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
@@ -33,11 +32,12 @@ import org.lealone.db.SetTypes;
 import org.lealone.db.SysProperties;
 import org.lealone.db.UserAggregate;
 import org.lealone.db.UserDataType;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.api.Trigger;
 import org.lealone.db.auth.Right;
 import org.lealone.db.auth.User;
 import org.lealone.db.constraint.ConstraintReferential;
 import org.lealone.db.index.Index;
-import org.lealone.db.result.SelectOrderBy;
 import org.lealone.db.result.SortOrder;
 import org.lealone.db.schema.FunctionAlias;
 import org.lealone.db.schema.Schema;
@@ -48,10 +48,7 @@ import org.lealone.db.table.DummyTable;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.RangeTable;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
-import org.lealone.db.table.TableFilter.TableFilterVisitor;
 import org.lealone.db.table.TableView;
-import org.lealone.db.value.CaseInsensitiveMap;
 import org.lealone.db.value.CompareMode;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
@@ -94,7 +91,7 @@ import org.lealone.sql.ddl.CreateUser;
 import org.lealone.sql.ddl.CreateUserDataType;
 import org.lealone.sql.ddl.CreateView;
 import org.lealone.sql.ddl.DeallocateProcedure;
-import org.lealone.sql.ddl.DefineStatement;
+import org.lealone.sql.ddl.DefinitionStatement;
 import org.lealone.sql.ddl.DropAggregate;
 import org.lealone.sql.ddl.DropConstant;
 import org.lealone.sql.ddl.DropDatabase;
@@ -142,6 +139,7 @@ import org.lealone.sql.expression.ExpressionList;
 import org.lealone.sql.expression.Operation;
 import org.lealone.sql.expression.Parameter;
 import org.lealone.sql.expression.Rownum;
+import org.lealone.sql.expression.SelectOrderBy;
 import org.lealone.sql.expression.SequenceValue;
 import org.lealone.sql.expression.Subquery;
 import org.lealone.sql.expression.ValueExpression;
@@ -154,6 +152,9 @@ import org.lealone.sql.expression.function.FunctionCall;
 import org.lealone.sql.expression.function.FunctionTable;
 import org.lealone.sql.expression.function.JavaFunction;
 import org.lealone.sql.expression.function.TableFunction;
+import org.lealone.sql.optimizer.SingleColumnResolver;
+import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.optimizer.TableFilter.TableFilterVisitor;
 
 /**
  * The parser is used to convert a SQL statement string to an command object.
@@ -228,7 +229,7 @@ public class Parser implements SQLParser {
      */
     @Override
     public Expression parseExpression(String sql) {
-        parameters = New.arrayList();
+        parameters = Utils.newSmallArrayList();
         initialize(sql);
         read();
         return readExpression();
@@ -241,7 +242,7 @@ public class Parser implements SQLParser {
      * @return the table object
      */
     public Table parseTableName(String sql) {
-        parameters = New.arrayList();
+        parameters = Utils.newSmallArrayList();
         initialize(sql);
         read();
         return readTableOrView();
@@ -291,11 +292,11 @@ public class Parser implements SQLParser {
     private StatementBase parse(String sql, boolean withExpectedList) {
         initialize(sql);
         if (withExpectedList) {
-            expectedList = New.arrayList();
+            expectedList = Utils.newSmallArrayList();
         } else {
             expectedList = null;
         }
-        parameters = New.arrayList();
+        parameters = Utils.newSmallArrayList();
         currentSelect = null;
         currentStatement = null;
         createView = null;
@@ -615,7 +616,7 @@ public class Parser implements SQLParser {
         }
         String procedureName = readAliasIdentifier();
         if (readIf("(")) {
-            ArrayList<Column> list = New.arrayList();
+            ArrayList<Column> list = Utils.newSmallArrayList();
             for (int i = 0;; i++) {
                 Column column = parseColumnForTable("C" + i, true);
                 list.add(column);
@@ -709,7 +710,7 @@ public class Parser implements SQLParser {
         command.setTableFilter(filter);
         read("SET");
         if (readIf("(")) {
-            ArrayList<Column> columns = New.arrayList();
+            ArrayList<Column> columns = Utils.newSmallArrayList();
             do {
                 Column column = readTableColumn(filter);
                 columns.add(column);
@@ -799,7 +800,7 @@ public class Parser implements SQLParser {
     }
 
     private IndexColumn[] parseIndexColumnList() {
-        ArrayList<IndexColumn> columns = New.arrayList();
+        ArrayList<IndexColumn> columns = Utils.newSmallArrayList();
         do {
             IndexColumn column = new IndexColumn();
             column.columnName = readColumnIdentifier();
@@ -823,7 +824,7 @@ public class Parser implements SQLParser {
     }
 
     private String[] parseColumnList() {
-        ArrayList<String> columns = New.arrayList();
+        ArrayList<String> columns = Utils.newSmallArrayList();
         do {
             String columnName = readColumnIdentifier();
             columns.add(columnName);
@@ -832,8 +833,8 @@ public class Parser implements SQLParser {
     }
 
     private Column[] parseColumnList(Table table) {
-        ArrayList<Column> columns = New.arrayList();
-        HashSet<Column> set = New.hashSet();
+        ArrayList<Column> columns = Utils.newSmallArrayList();
+        HashSet<Column> set = new HashSet<>();
         if (!readIf(")")) {
             do {
                 Column column = parseColumn(table);
@@ -865,7 +866,7 @@ public class Parser implements SQLParser {
     private StatementBase parseHelp() {
         StringBuilder buff = new StringBuilder("SELECT * FROM INFORMATION_SCHEMA.HELP");
         int i = 0;
-        ArrayList<Value> paramValues = New.arrayList();
+        ArrayList<Value> paramValues = Utils.newSmallArrayList();
         while (currentTokenType != END) {
             String s = currentToken;
             read();
@@ -882,7 +883,7 @@ public class Parser implements SQLParser {
     }
 
     private StatementBase parseShow() {
-        ArrayList<Value> paramValues = New.arrayList();
+        ArrayList<Value> paramValues = Utils.newSmallArrayList();
         StringBuilder buff = new StringBuilder("SELECT ");
         if (readIf("DATABASES")) {
             buff.append("DATABASE_NAME FROM INFORMATION_SCHEMA.DATABASES");
@@ -992,7 +993,7 @@ public class Parser implements SQLParser {
         }
         if (readIf("VALUES")) {
             do {
-                ArrayList<Expression> values = New.arrayList();
+                ArrayList<Expression> values = Utils.newSmallArrayList();
                 read("(");
                 if (!readIf(")")) {
                     do {
@@ -1037,7 +1038,7 @@ public class Parser implements SQLParser {
         } else if (readIf("VALUES")) {
             read("(");
             do {
-                ArrayList<Expression> values = New.arrayList();
+                ArrayList<Expression> values = Utils.newSmallArrayList();
                 if (!readIf(")")) {
                     do {
                         if (readIf("DEFAULT")) {
@@ -1054,8 +1055,8 @@ public class Parser implements SQLParser {
             if (columns != null) {
                 throw getSyntaxError();
             }
-            ArrayList<Column> columnList = New.arrayList();
-            ArrayList<Expression> values = New.arrayList();
+            ArrayList<Column> columnList = Utils.newSmallArrayList();
+            ArrayList<Expression> values = Utils.newSmallArrayList();
             do {
                 columnList.add(parseColumn(table));
                 read("=");
@@ -1129,7 +1130,7 @@ public class Parser implements SQLParser {
             // can't use readIdentifierWithSchema() because
             // it would not read schema.table.column correctly
             // if the db name is equal to the schema name
-            ArrayList<String> list = New.arrayList();
+            ArrayList<String> list = Utils.newSmallArrayList();
             do {
                 list.add(readUniqueIdentifier());
             } while (readIf("."));
@@ -1363,7 +1364,7 @@ public class Parser implements SQLParser {
     private Query parseSelect() {
         int paramIndex = parameters.size();
         Query command = parseSelectUnion();
-        ArrayList<Parameter> params = New.arrayList();
+        ArrayList<Parameter> params = Utils.newSmallArrayList();
         for (int i = paramIndex, size = parameters.size(); i < size; i++) {
             params.add(parameters.get(i));
         }
@@ -1428,7 +1429,7 @@ public class Parser implements SQLParser {
         if (readIf("GROUP")) {
             read("BY");
             command.setGroupQuery();
-            ArrayList<Expression> list = New.arrayList();
+            ArrayList<Expression> list = Utils.newSmallArrayList();
             do {
                 Expression expr = readExpression();
                 list.add(expr);
@@ -1485,7 +1486,7 @@ public class Parser implements SQLParser {
             if (command instanceof Select) {
                 currentSelect = (Select) command;
             }
-            ArrayList<SelectOrderBy> orderList = New.arrayList();
+            ArrayList<SelectOrderBy> orderList = Utils.newSmallArrayList();
             do {
                 boolean canBeNumber = true;
                 if (readIf("=")) {
@@ -1610,7 +1611,7 @@ public class Parser implements SQLParser {
         } else {
             readIf("ALL");
         }
-        ArrayList<Expression> expressions = New.arrayList();
+        ArrayList<Expression> expressions = Utils.newSmallArrayList();
         do {
             if (readIf("*")) {
                 expressions.add(new Wildcard(null, null));
@@ -1642,7 +1643,7 @@ public class Parser implements SQLParser {
             if (isSelect()) {
                 Query query = parseSelectUnion();
                 read(")");
-                query.setParameterList(New.arrayList(parameters));
+                query.setParameterList(new ArrayList<>(parameters));
                 query.init();
                 ServerSession s;
                 if (createView != null) {
@@ -1758,7 +1759,7 @@ public class Parser implements SQLParser {
                 command.addTableFilter(join, false);
             } else {
                 // make flat so the optimizer can work better
-                Expression on = (Expression) join.getJoinCondition();
+                Expression on = join.getJoinCondition();
                 if (on != null) {
                     command.addCondition(on);
                 }
@@ -1991,7 +1992,7 @@ public class Parser implements SQLParser {
                         Query query = parseSelect();
                         r = new ConditionInSelect(database, r, query, false, Comparison.EQUAL);
                     } else {
-                        ArrayList<Expression> v = New.arrayList();
+                        ArrayList<Expression> v = Utils.newSmallArrayList();
                         Expression last;
                         do {
                             last = readExpression();
@@ -2175,7 +2176,7 @@ public class Parser implements SQLParser {
     }
 
     private ArrayList<SelectOrderBy> parseSimpleOrderList() {
-        ArrayList<SelectOrderBy> orderList = New.arrayList();
+        ArrayList<SelectOrderBy> orderList = Utils.newSmallArrayList();
         do {
             SelectOrderBy order = new SelectOrderBy();
             Expression expr = readExpression();
@@ -2201,7 +2202,7 @@ public class Parser implements SQLParser {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, functionName);
         }
         Expression[] args;
-        ArrayList<Expression> argList = New.arrayList();
+        ArrayList<Expression> argList = Utils.newSmallArrayList();
         int numArgs = 0;
         while (!readIf(")")) {
             if (numArgs++ > 0) {
@@ -2216,7 +2217,7 @@ public class Parser implements SQLParser {
     }
 
     private JavaAggregate readJavaAggregate(UserAggregate aggregate) {
-        ArrayList<Expression> params = New.arrayList();
+        ArrayList<Expression> params = Utils.newSmallArrayList();
         do {
             params.add(readExpression());
         } while (readIf(","));
@@ -2373,7 +2374,7 @@ public class Parser implements SQLParser {
         case Function.TABLE:
         case Function.TABLE_DISTINCT: {
             int i = 0;
-            ArrayList<Column> columns = New.arrayList();
+            ArrayList<Column> columns = Utils.newSmallArrayList();
             do {
                 String columnName = readAliasIdentifier();
                 Column column = parseColumnWithType(columnName);
@@ -2515,7 +2516,7 @@ public class Parser implements SQLParser {
                     } else if (parameters.size() > 0) {
                         throw DbException.get(ErrorCode.CANNOT_MIX_INDEXED_AND_UNINDEXED_PARAMS);
                     }
-                    indexedParameterList = New.arrayList();
+                    indexedParameterList = Utils.newSmallArrayList();
                 }
                 int index = currentValue.getInt() - 1;
                 if (index < 0 || index >= Constants.MAX_PARAMETER_INDEX) {
@@ -2656,7 +2657,7 @@ public class Parser implements SQLParser {
             } else {
                 r = readExpression();
                 if (readIf(",")) {
-                    ArrayList<Expression> list = New.arrayList();
+                    ArrayList<Expression> list = Utils.newSmallArrayList();
                     list.add(r);
                     while (!readIf(")")) {
                         r = readExpression();
@@ -3918,7 +3919,8 @@ public class Parser implements SQLParser {
             if (selectivity != Constants.SELECTIVITY_DEFAULT) {
                 column.setSelectivity(selectivity);
             }
-            column.addCheckConstraint(session, templateColumn.getCheckConstraint(session, columnName));
+            SingleColumnResolver resolver = new SingleColumnResolver(column);
+            column.addCheckConstraint(session, templateColumn.getCheckConstraint(session, columnName), resolver);
         }
         column.setComment(comment);
         column.setOriginalSQL(original);
@@ -4121,7 +4123,7 @@ public class Parser implements SQLParser {
         Select command = new Select(session);
         currentSelect = command;
         TableFilter filter = parseValuesTable();
-        ArrayList<Expression> list = New.arrayList();
+        ArrayList<Expression> list = Utils.newSmallArrayList();
         list.add(new Wildcard(null, null));
         command.setExpressions(list);
         command.addTableFilter(filter, true);
@@ -4132,11 +4134,11 @@ public class Parser implements SQLParser {
     private TableFilter parseValuesTable() {
         Schema mainSchema = database.getSchema(Constants.SCHEMA_MAIN);
         TableFunction tf = (TableFunction) Function.getFunction(database, "TABLE");
-        ArrayList<Column> columns = New.arrayList();
-        ArrayList<ArrayList<Expression>> rows = New.arrayList();
+        ArrayList<Column> columns = Utils.newSmallArrayList();
+        ArrayList<ArrayList<Expression>> rows = Utils.newSmallArrayList();
         do {
             int i = 0;
-            ArrayList<Expression> row = New.arrayList();
+            ArrayList<Expression> row = Utils.newSmallArrayList();
             boolean multiColumn = readIf("(");
             do {
                 Expression expr = readExpression();
@@ -4225,6 +4227,7 @@ public class Parser implements SQLParser {
 
         RunMode runMode = parseRunMode();
         Map<String, String> replicationProperties = null;
+        Map<String, String> endpointAssignmentProperties = null;
         // Map<String, String> resourceQuota = null;
         Map<String, String> parameters = null;
         if (runMode == RunMode.REPLICATION || runMode == RunMode.SHARDING) {
@@ -4235,16 +4238,23 @@ public class Parser implements SQLParser {
                 checkReplicationProperties(replicationProperties);
             }
         }
+
+        if (readIf("WITH")) {
+            read("ENDPOINT");
+            read("ASSIGNMENT");
+            read("STRATEGY");
+            endpointAssignmentProperties = parseParameters(true);
+            checkEndpointAssignmentProperties(replicationProperties);
+        }
         // if (readIf("RESOURCE")) {
         // read("QUOTA");
         // resourceQuota = parseParameters();
         // }
-        if (readIf("PARAMETERS"))
+        if (readIf("PARAMETERS")) {
             parameters = parseParameters();
-        // return new CreateDatabase(session, dbName, ifNotExists, runMode, replicationProperties, resourceQuota,
-        // parameters);
-
-        return new CreateDatabase(session, dbName, ifNotExists, runMode, replicationProperties, parameters);
+        }
+        return new CreateDatabase(session, dbName, ifNotExists, runMode, replicationProperties,
+                endpointAssignmentProperties, parameters);
     }
 
     private CreateService parseCreateService() {
@@ -4334,6 +4344,12 @@ public class Parser implements SQLParser {
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1, sqlCommand + ", missing replication strategy class");
     }
 
+    private void checkEndpointAssignmentProperties(Map<String, String> endpointAssignmentProperties) {
+        if (endpointAssignmentProperties != null && !endpointAssignmentProperties.containsKey("class"))
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    sqlCommand + ", missing endpoint assignment strategy class");
+    }
+
     private CreateSchema parseCreateSchema() {
         CreateSchema command = new CreateSchema(session);
         command.setIfNotExists(readIfNotExists());
@@ -4352,7 +4368,9 @@ public class Parser implements SQLParser {
 
     private Map<String, String> parseParameters(boolean toLowerCase) {
         read("(");
-        HashMap<String, String> parameters = toLowerCase ? New.hashMap() : new CaseInsensitiveMap<>();
+        // HashMap<String, String> parameters = toLowerCase ? new HashMap<>() : new CaseInsensitiveMap<>();
+        // 参数名都是大小写不敏感的
+        HashMap<String, String> parameters = new CaseInsensitiveMap<>();
         if (readIf(")"))
             return parameters;
         String k, v;
@@ -4469,7 +4487,8 @@ public class Parser implements SQLParser {
         Column col = parseColumnForTable("VALUE", true);
         if (readIf("CHECK")) {
             Expression expr = readExpression();
-            col.addCheckConstraint(session, expr);
+            SingleColumnResolver resolver = new SingleColumnResolver(col);
+            col.addCheckConstraint(session, expr, resolver);
         }
         col.rename(null);
         command.setColumn(col);
@@ -4594,7 +4613,7 @@ public class Parser implements SQLParser {
         Schema schema = getSchema();
         Table recursiveTable;
         read("(");
-        ArrayList<Column> columns = New.arrayList();
+        ArrayList<Column> columns = Utils.newSmallArrayList();
         String[] cols = parseColumnList();
         for (String c : cols) {
             columns.add(new Column(c, Value.STRING));
@@ -4718,6 +4737,7 @@ public class Parser implements SQLParser {
         Database db = LealoneDatabase.getInstance().getDatabase(dbName);
         RunMode runMode = parseRunMode();
         Map<String, String> replicationProperties = null;
+        Map<String, String> endpointAssignmentProperties = null;
         Map<String, String> parameters = null;
         if (runMode == RunMode.REPLICATION || runMode == RunMode.SHARDING) {
             if (readIf("WITH")) {
@@ -4727,9 +4747,17 @@ public class Parser implements SQLParser {
                 checkReplicationProperties(replicationProperties);
             }
         }
+
+        if (readIf("WITH")) {
+            read("ENDPOINT");
+            read("ASSIGNMENT");
+            read("STRATEGY");
+            endpointAssignmentProperties = parseParameters(true);
+            checkEndpointAssignmentProperties(replicationProperties);
+        }
         if (readIf("PARAMETERS"))
             parameters = parseParameters();
-        return new AlterDatabase(session, db, parameters, replicationProperties, runMode);
+        return new AlterDatabase(session, db, runMode, replicationProperties, endpointAssignmentProperties, parameters);
     }
 
     private AlterIndexRename parseAlterIndex() {
@@ -4758,7 +4786,7 @@ public class Parser implements SQLParser {
         return command;
     }
 
-    private DefineStatement parseAlterSchema() {
+    private DefinitionStatement parseAlterSchema() {
         String schemaName = readIdentifierWithSchema();
         return parseAlterSchemaRename(schemaName);
     }
@@ -5032,7 +5060,7 @@ public class Parser implements SQLParser {
         } else if (readIf("SEARCH_PATH") || readIf(SetTypes.getTypeName(SetTypes.SCHEMA_SEARCH_PATH))) {
             readIfEqualOrTo();
             Set command = new Set(session, SetTypes.SCHEMA_SEARCH_PATH);
-            ArrayList<String> list = New.arrayList();
+            ArrayList<String> list = Utils.newSmallArrayList();
             list.add(readAliasIdentifier());
             while (readIf(",")) {
                 list.add(readAliasIdentifier());
@@ -5164,13 +5192,13 @@ public class Parser implements SQLParser {
             }
         }
         if (readIf("SCHEMA")) {
-            HashSet<String> schemaNames = New.hashSet();
+            HashSet<String> schemaNames = new HashSet<>();
             do {
                 schemaNames.add(readUniqueIdentifier());
             } while (readIf(","));
             command.setSchemaNames(schemaNames);
         } else if (readIf("TABLE")) {
-            ArrayList<Table> tables = New.arrayList();
+            ArrayList<Table> tables = Utils.newSmallArrayList();
             do {
                 tables.add(readTableOrView());
             } while (readIf(","));
@@ -5439,7 +5467,7 @@ public class Parser implements SQLParser {
         AlterTableAlterColumn command = new AlterTableAlterColumn(session, schema);
         command.setType(SQLStatement.ALTER_TABLE_ADD_COLUMN);
         command.setTable(table);
-        ArrayList<Column> columnsToAdd = New.arrayList();
+        ArrayList<Column> columnsToAdd = Utils.newSmallArrayList();
         if (readIf("(")) {
             command.setIfNotExists(false);
             do {
@@ -5491,7 +5519,7 @@ public class Parser implements SQLParser {
         }
     }
 
-    private DefineStatement parseAlterTableAddConstraintIf(String tableName, Schema schema) {
+    private DefinitionStatement parseAlterTableAddConstraintIf(String tableName, Schema schema) {
         String constraintName = null, comment = null;
         boolean ifNotExists = false;
         boolean allowIndexDefinition = database.getMode().indexDefinitionInCreateTable;
@@ -5631,7 +5659,6 @@ public class Parser implements SQLParser {
         Column column = parseColumnForTable(columnName, true);
         if (column.isAutoIncrement() && column.isPrimaryKey()) {
             column.setPrimaryKey(false);
-            column.setRowKeyColumn(true);
             IndexColumn[] cols = { new IndexColumn() };
             cols[0].columnName = column.getName();
             cols[0].column = column;
@@ -5646,12 +5673,8 @@ public class Parser implements SQLParser {
         if (readIf("CONSTRAINT")) {
             constraintName = readColumnIdentifier();
         }
-        if (readIf("ROW")) {
+        if (readIf("PRIMARY")) {
             read("KEY");
-            column.setRowKeyColumn(true);
-        } else if (readIf("PRIMARY")) {
-            read("KEY");
-            column.setRowKeyColumn(true);
             boolean hash = readIf("HASH");
             IndexColumn[] cols = { new IndexColumn() };
             cols[0].columnName = column.getName();
@@ -5684,7 +5707,8 @@ public class Parser implements SQLParser {
         }
         if (readIf("CHECK")) {
             Expression expr = readExpression();
-            column.addCheckConstraint(session, expr);
+            SingleColumnResolver resolver = new SingleColumnResolver(column);
+            column.addCheckConstraint(session, expr, resolver);
         }
         if (readIf("REFERENCES")) {
             AlterTableAddConstraint ref = new AlterTableAddConstraint(session, schema, false);
@@ -5703,7 +5727,7 @@ public class Parser implements SQLParser {
 
     private void parseTableDefinition(Schema schema, CreateTable command, String tableName) {
         do {
-            DefineStatement c = parseAlterTableAddConstraintIf(tableName, schema);
+            DefinitionStatement c = parseAlterTableAddConstraintIf(tableName, schema);
             if (c != null) {
                 command.addConstraintCommand(c);
             } else {
@@ -5740,7 +5764,7 @@ public class Parser implements SQLParser {
         } else if (database.getSettings().defaultStorageEngine != null) {
             command.setStorageEngineName(database.getSettings().defaultStorageEngine);
         }
-        if (readIf("WITH")) {
+        if (readIf("PARAMETERS")) {
             command.setStorageEngineParams(parseParameters());
         }
         if (temp) {

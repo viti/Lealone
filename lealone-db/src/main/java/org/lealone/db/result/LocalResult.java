@@ -11,13 +11,13 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
+import org.lealone.common.util.Utils;
 import org.lealone.db.ServerSession;
-import org.lealone.db.expression.Expression;
 import org.lealone.db.util.ValueHashMap;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
+import org.lealone.sql.IExpression;
 
 /**
  * A local result set contains all row data of a result set.
@@ -30,7 +30,7 @@ public class LocalResult implements Result, ResultTarget {
     private int maxMemoryRows;
     private ServerSession session;
     private int visibleColumnCount;
-    private Expression[] expressions;
+    private IExpression[] expressions;
     private int rowId, rowCount;
     private ArrayList<Value[]> rows;
     private SortOrder sort;
@@ -58,14 +58,14 @@ public class LocalResult implements Result, ResultTarget {
      * @param expressions the expression array
      * @param visibleColumnCount the number of visible columns
      */
-    public LocalResult(ServerSession session, Expression[] expressions, int visibleColumnCount) {
+    public LocalResult(ServerSession session, IExpression[] expressions, int visibleColumnCount) {
         this.session = session;
         if (session == null) {
             this.maxMemoryRows = Integer.MAX_VALUE;
         } else {
             this.maxMemoryRows = session.getDatabase().getMaxMemoryRows();
         }
-        rows = New.arrayList();
+        rows = Utils.newSmallArrayList();
         this.visibleColumnCount = visibleColumnCount;
         rowId = -1;
         this.expressions = expressions;
@@ -80,7 +80,7 @@ public class LocalResult implements Result, ResultTarget {
      * @return the local result set
      */
     public static LocalResult read(ServerSession session, ResultSet rs, int maxRows) {
-        Expression[] cols = getExpressionColumns(session, rs);
+        IExpression[] cols = getExpressionColumns(session, rs);
         int columnCount = cols.length;
         LocalResult result = new LocalResult(session, cols, columnCount);
         try {
@@ -106,8 +106,8 @@ public class LocalResult implements Result, ResultTarget {
      * @param rs the result set
      * @return an array of expression columns
      */
-    public static Expression[] getExpressionColumns(ServerSession session, ResultSet rs) {
-        return new Expression[0]; // TODO
+    public static IExpression[] getExpressionColumns(ServerSession session, ResultSet rs) {
+        return new IExpression[0]; // TODO
         // try {
         // ResultSetMetaData meta = rs.getMetaData();
         // int columnCount = meta.getColumnCount();
@@ -330,7 +330,7 @@ public class LocalResult implements Result, ResultTarget {
                     ResultExternal temp = external;
                     external = null;
                     temp.reset();
-                    rows = New.arrayList();
+                    rows = new ArrayList<>();
                     // TODO use offset directly if possible
                     while (true) {
                         Value[] list = temp.next();
@@ -389,7 +389,7 @@ public class LocalResult implements Result, ResultTarget {
         }
         if (external == null) {
             if (rows.size() > limit) {
-                rows = New.arrayList(rows.subList(0, limit));
+                rows = new ArrayList<>(rows.subList(0, limit));
                 rowCount = limit;
             }
         } else {
@@ -483,7 +483,7 @@ public class LocalResult implements Result, ResultTarget {
             } else {
                 // avoid copying the whole array for each row
                 int remove = Math.min(offset, rows.size());
-                rows = New.arrayList(rows.subList(remove, rows.size()));
+                rows = new ArrayList<>(rows.subList(remove, rows.size()));
                 rowCount -= remove;
             }
         } else {

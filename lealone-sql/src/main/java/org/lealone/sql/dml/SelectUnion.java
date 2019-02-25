@@ -10,57 +10,37 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StringUtils;
 import org.lealone.db.CommandParameter;
 import org.lealone.db.ServerSession;
 import org.lealone.db.SysProperties;
-import org.lealone.db.expression.ExpressionVisitor;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.LocalResult;
 import org.lealone.db.result.Result;
 import org.lealone.db.result.ResultTarget;
-import org.lealone.db.result.SelectOrderBy;
 import org.lealone.db.result.SortOrder;
 import org.lealone.db.table.Column;
-import org.lealone.db.table.ColumnResolver;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueInt;
 import org.lealone.db.value.ValueNull;
+import org.lealone.sql.ISelectUnion;
 import org.lealone.sql.PreparedStatement;
 import org.lealone.sql.SQLStatement;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
+import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.Parameter;
+import org.lealone.sql.expression.SelectOrderBy;
 import org.lealone.sql.expression.ValueExpression;
+import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * Represents a union SELECT statement.
  */
-public class SelectUnion extends Query implements org.lealone.db.expression.SelectUnion {
-
-    /**
-     * The type of a UNION statement.
-     */
-    public static final int UNION = 0;
-
-    /**
-     * The type of a UNION ALL statement.
-     */
-    public static final int UNION_ALL = 1;
-
-    /**
-     * The type of an EXCEPT statement.
-     */
-    public static final int EXCEPT = 2;
-
-    /**
-     * The type of an INTERSECT statement.
-     */
-    public static final int INTERSECT = 3;
+public class SelectUnion extends Query implements ISelectUnion {
 
     private int unionType;
     private final Query left;
@@ -277,7 +257,7 @@ public class SelectUnion extends Query implements org.lealone.db.expression.Sele
         ArrayList<Expression> le = left.getExpressions();
         // set the expressions to get the right column count and names,
         // but can't validate at this time
-        expressions = New.arrayList();
+        expressions = new ArrayList<>(len);
         for (int i = 0; i < len; i++) {
             Expression l = le.get(i);
             expressions.add(l);
@@ -298,7 +278,7 @@ public class SelectUnion extends Query implements org.lealone.db.expression.Sele
         right.prepare();
         int len = left.getColumnCount();
         // set the correct expressions now
-        expressions = New.arrayList();
+        expressions = new ArrayList<>(len);
         ArrayList<Expression> le = left.getExpressions();
         ArrayList<Expression> re = right.getExpressions();
         for (int i = 0; i < len; i++) {
@@ -465,13 +445,8 @@ public class SelectUnion extends Query implements org.lealone.db.expression.Sele
     }
 
     @Override
-    public boolean isBatchForInsert() {
-        return left.isBatchForInsert() || right.isBatchForInsert();
-    }
-
-    @Override
-    public void addGlobalCondition(CommandParameter param, int columnId, int comparisonType) {
-        this.addGlobalCondition((Parameter) param, columnId, comparisonType);
+    public void addGlobalCondition(CommandParameter param, int columnId, int indexConditionType) {
+        this.addGlobalCondition((Parameter) param, columnId, indexConditionType);
     }
 
     @Override

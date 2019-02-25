@@ -11,33 +11,30 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.api.Trigger;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
+import org.lealone.common.util.Utils;
 import org.lealone.db.CommandParameter;
 import org.lealone.db.Constants;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
 import org.lealone.db.SysProperties;
-import org.lealone.db.expression.ExpressionVisitor;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.api.Trigger;
 import org.lealone.db.index.Cursor;
 import org.lealone.db.index.Index;
+import org.lealone.db.index.IndexConditionType;
 import org.lealone.db.index.IndexType;
 import org.lealone.db.result.LocalResult;
 import org.lealone.db.result.Result;
 import org.lealone.db.result.ResultTarget;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.SearchRow;
-import org.lealone.db.result.SelectOrderBy;
 import org.lealone.db.result.SortOrder;
 import org.lealone.db.table.Column;
-import org.lealone.db.table.ColumnResolver;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.util.ValueHashMap;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
@@ -49,7 +46,12 @@ import org.lealone.sql.expression.Comparison;
 import org.lealone.sql.expression.ConditionAndOr;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
+import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.Parameter;
+import org.lealone.sql.expression.SelectOrderBy;
+import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.optimizer.Optimizer;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents a simple SELECT statement.
@@ -64,10 +66,10 @@ import org.lealone.sql.expression.Parameter;
  * @author Thomas Mueller
  * @author Joel Turkel (Group sorted query)
  */
-public class Select extends Query implements org.lealone.db.expression.Select {
+public class Select extends Query {
     private TableFilter topTableFilter;
-    private final ArrayList<TableFilter> filters = New.arrayList();
-    private final ArrayList<TableFilter> topFilters = New.arrayList();
+    private final ArrayList<TableFilter> filters = Utils.newSmallArrayList();
+    private final ArrayList<TableFilter> topFilters = Utils.newSmallArrayList();
     private ArrayList<Expression> expressions;
     private Expression[] expressionArray;
     private Expression having;
@@ -191,7 +193,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         visibleColumnCount = expressions.size();
         ArrayList<String> expressionSQL;
         if (orderList != null || group != null) {
-            expressionSQL = New.arrayList();
+            expressionSQL = new ArrayList<>(visibleColumnCount);
             for (int i = 0; i < visibleColumnCount; i++) {
                 Expression expr = expressions.get(i);
                 expr = expr.getNonAliasExpression();
@@ -359,7 +361,8 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         }
 
         // 对min、max、count三个聚合函数的特殊优化
-        if (condition == null && isGroupQuery && groupIndex == null && havingIndex < 0 && filters.size() == 1) {
+        if (condition == null && isGroupQuery && groupIndex == null && havingIndex < 0 && filters.size() == 1
+                && filters.get(0).getPageKeys() != null) {
             Table t = filters.get(0).getTable();
             ExpressionVisitor optimizable = ExpressionVisitor.getOptimizableVisitor(t);
             isQuickAggregateQuery = isEverything(optimizable);
@@ -517,7 +520,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
             if (n != null) {
                 setEvaluatableRecursive(n);
             }
-            Expression on = (Expression) f.getJoinCondition();
+            Expression on = f.getJoinCondition();
             if (on != null) {
                 if (!on.isEverything(ExpressionVisitor.EVALUATABLE_VISITOR)) {
                     if (session.getDatabase().getSettings().nestedJoins) {
@@ -542,7 +545,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
                     }
                 }
             }
-            on = (Expression) f.getFilterCondition();
+            on = f.getFilterCondition();
             if (on != null) {
                 if (!on.isEverything(ExpressionVisitor.EVALUATABLE_VISITOR)) {
                     f.removeFilterCondition();
@@ -569,7 +572,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         if (sort == null) {
             return null;
         }
-        ArrayList<Column> sortColumns = New.arrayList();
+        ArrayList<Column> sortColumns = new ArrayList<>();
         for (int idx : sort.getQueryColumnIndexes()) {
             if (idx < 0 || idx >= expressions.size()) {
                 throw DbException.getInvalidValueException("ORDER BY", idx + 1);
@@ -872,7 +875,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         setCurrentRowNumber(0);
         ArrayList<Row> forUpdateRows = null;
         if (isForUpdateMvcc) {
-            forUpdateRows = New.arrayList();
+            forUpdateRows = new ArrayList<>();
         }
         int sampleSize = getSampleSizeValue(session);
         while (topTableFilter.next()) {
@@ -929,11 +932,11 @@ public class Select extends Query implements org.lealone.db.expression.Select {
 
                 if (previousKeyValues == null) {
                     previousKeyValues = keyValues;
-                    currentGroup = New.hashMap();
+                    currentGroup = new HashMap<>();
                 } else if (!Arrays.equals(previousKeyValues, keyValues)) {
                     addGroupSortedRow(previousKeyValues, columnCount, result);
                     previousKeyValues = keyValues;
-                    currentGroup = New.hashMap();
+                    currentGroup = new HashMap<>();
                 }
                 currentGroupRowId++;
 
@@ -1176,7 +1179,7 @@ public class Select extends Query implements org.lealone.db.expression.Select {
 
     @Override
     public HashSet<Table> getTables() {
-        HashSet<Table> set = New.hashSet();
+        HashSet<Table> set = new HashSet<>(filters.size());
         for (TableFilter filter : filters) {
             set.add(filter.getTable());
         }
@@ -1196,8 +1199,12 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         return getPlanSQL(false, false);
     }
 
+    @Override
     public String getPlanSQL(boolean isDistributed) {
-        return getPlanSQL(isDistributed, false);
+        if (isGroupQuery() || getLimit() != null || getOffset() != null)
+            return getPlanSQL(isDistributed, false);
+        else
+            return getSQL();
     }
 
     public String getPlanSQL(boolean isDistributed, boolean isMerged) {
@@ -1499,18 +1506,26 @@ public class Select extends Query implements org.lealone.db.expression.Select {
         return false;
     }
 
-    @Override
     public SortOrder getSortOrder() {
         return sort;
     }
 
     @Override
-    public boolean isBatchForInsert() {
-        return !containsEqualPartitionKeyComparisonType(topTableFilter);
-    }
-
-    @Override
-    public void addGlobalCondition(CommandParameter param, int columnId, int comparisonType) {
+    public void addGlobalCondition(CommandParameter param, int columnId, int indexConditionType) {
+        int comparisonType = 0;
+        switch (indexConditionType) {
+        case IndexConditionType.EQUALITY:
+            comparisonType = Comparison.EQUAL_NULL_SAFE;
+            break;
+        case IndexConditionType.START:
+            comparisonType = Comparison.BIGGER_EQUAL;
+            break;
+        case IndexConditionType.END:
+            comparisonType = Comparison.SMALLER_EQUAL;
+            break;
+        default:
+            throw DbException.throwInternalError("indexConditionType: " + indexConditionType);
+        }
         this.addGlobalCondition((Parameter) param, columnId, comparisonType);
     }
 
@@ -1521,5 +1536,22 @@ public class Select extends Query implements org.lealone.db.expression.Select {
 
         priority = MIN_PRIORITY;
         return priority;
+    }
+
+    @Override
+    public TableFilter getTableFilter() {
+        return topTableFilter;
+    }
+
+    public HashSet<Column> getReferencedColumns() {
+        int len = expressionArray.length;
+        HashSet<Column> columnSet = new HashSet<>(len);
+        for (int i = 0; i < len; i++) {
+            expressionArray[i].getColumns(columnSet);
+        }
+        if (condition != null)
+            condition.getColumns(columnSet);
+
+        return columnSet;
     }
 }

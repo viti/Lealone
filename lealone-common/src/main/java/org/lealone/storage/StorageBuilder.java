@@ -8,7 +8,6 @@ package org.lealone.storage;
 import java.util.HashMap;
 
 import org.lealone.common.util.DataUtils;
-import org.lealone.common.util.New;
 
 /**
  * A storage builder.
@@ -18,7 +17,7 @@ import org.lealone.common.util.New;
  */
 public abstract class StorageBuilder {
 
-    protected final HashMap<String, Object> config = New.hashMap();
+    protected final HashMap<String, Object> config = new HashMap<>();
 
     public abstract Storage openStorage();
 
@@ -28,14 +27,14 @@ public abstract class StorageBuilder {
     }
 
     /**
-     * Use the following storage name. If the file does not exist, it is
+     * Use the following storage path. If the file does not exist, it is
      * automatically created. The parent directory already must exist.
      * 
-     * @param storageName the storage name
+     * @param storagePath the storage path
      * @return this
      */
-    public StorageBuilder storageName(String storageName) {
-        return set("storageName", storageName);
+    public StorageBuilder storagePath(String storagePath) {
+        return set("storagePath", storagePath);
     }
 
     /**

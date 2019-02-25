@@ -6,26 +6,26 @@
  */
 package org.lealone.sql.dml;
 
-import org.lealone.api.Trigger;
 import org.lealone.common.util.StringUtils;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.Trigger;
 import org.lealone.db.auth.Right;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.RowList;
-import org.lealone.db.table.PlanItem;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.PreparedStatement;
 import org.lealone.sql.SQLStatement;
 import org.lealone.sql.expression.Expression;
+import org.lealone.sql.optimizer.PlanItem;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents the statement
  * DELETE
  */
-public class Delete extends ManipulateStatement {
+public class Delete extends ManipulationStatement {
 
     private Expression condition;
     private TableFilter tableFilter;
@@ -53,11 +53,6 @@ public class Delete extends ManipulateStatement {
         this.limitExpr = limit;
     }
 
-    @Override
-    public boolean isBatch() {
-        return !containsEqualPartitionKeyComparisonType(tableFilter);
-    }
-
     public void setTableFilter(TableFilter tableFilter) {
         this.tableFilter = tableFilter;
     }
@@ -72,6 +67,7 @@ public class Delete extends ManipulateStatement {
             condition.mapColumns(tableFilter, 0);
             condition = condition.optimize(session);
             condition.createIndexConditions(session, tableFilter);
+            tableFilter.createColumnIndexes(condition);
         }
         PlanItem item = tableFilter.getBestPlanItem(session, 1);
         tableFilter.setPlanItem(item);
@@ -158,5 +154,10 @@ public class Delete extends ManipulateStatement {
 
         priority = NORM_PRIORITY - 1;
         return priority;
+    }
+
+    @Override
+    public TableFilter getTableFilter() {
+        return tableFilter;
     }
 }

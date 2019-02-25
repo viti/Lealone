@@ -17,7 +17,10 @@
  */
 package org.lealone.storage;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -26,18 +29,19 @@ import org.lealone.common.util.DataUtils;
 import org.lealone.db.Session;
 import org.lealone.db.value.ValueLong;
 import org.lealone.net.NetEndpoint;
-import org.lealone.storage.type.StorageDataType;
 import org.lealone.storage.type.ObjectDataType;
+import org.lealone.storage.type.StorageDataType;
 
 public abstract class StorageMapBase<K, V> implements StorageMap<K, V> {
 
     protected final String name;
     protected final StorageDataType keyType;
     protected final StorageDataType valueType;
+    protected final Storage storage;
     // TODO 考虑是否要使用总是递增的数字
-    protected final AtomicLong lastKey = new AtomicLong(0);
+    protected final AtomicLong maxKey = new AtomicLong(0);
 
-    protected StorageMapBase(String name, StorageDataType keyType, StorageDataType valueType) {
+    protected StorageMapBase(String name, StorageDataType keyType, StorageDataType valueType, Storage storage) {
         DataUtils.checkArgument(name != null, "The name may not be null");
         if (keyType == null) {
             keyType = new ObjectDataType();
@@ -48,6 +52,7 @@ public abstract class StorageMapBase<K, V> implements StorageMap<K, V> {
         this.name = name;
         this.keyType = keyType;
         this.valueType = valueType;
+        this.storage = storage;
     }
 
     @Override
@@ -65,15 +70,29 @@ public abstract class StorageMapBase<K, V> implements StorageMap<K, V> {
         return valueType;
     }
 
+    @Override
+    public Storage getStorage() {
+        return storage;
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public K append(V value) {
+        K key = (K) ValueLong.get(maxKey.incrementAndGet());
+        put(key, value);
+        return key;
+    }
+
     // 如果新key比lastKey大就更新lastKey
     // 允许多线程并发更新
-    public void setLastKey(Object key) {
+    @Override
+    public void setMaxKey(Object key) {
         if (key instanceof ValueLong) {
             long k = ((ValueLong) key).getLong();
             while (true) {
-                long old = lastKey.get();
+                long old = maxKey.get();
                 if (k > old) {
-                    if (lastKey.compareAndSet(old, k))
+                    if (maxKey.compareAndSet(old, k))
                         break;
                 } else {
                     break;
@@ -82,17 +101,43 @@ public abstract class StorageMapBase<K, V> implements StorageMap<K, V> {
         }
     }
 
-    public long getLastKey() {
-        return lastKey.get();
+    @Override
+    public long getMaxKeyAsLong() {
+        return maxKey.get();
     }
 
     @Override
-    public void addLeafPage(ByteBuffer splitKey, ByteBuffer page) {
+    public long incrementAndGetMaxKeyAsLong() {
+        return maxKey.incrementAndGet();
+    }
+
+    @Override
+    public long getDiskSpaceUsed() {
+        return 0;
+    }
+
+    @Override
+    public long getMemorySpaceUsed() {
+        return 0;
+    }
+
+    @Override
+    public void transferTo(WritableByteChannel target, K firstKey, K lastKey) throws IOException {
+        throw DbException.getUnsupportedException("transferTo");
+    }
+
+    @Override
+    public void transferFrom(ReadableByteChannel src) throws IOException {
+        throw DbException.getUnsupportedException("transferFrom");
+    }
+
+    @Override
+    public void addLeafPage(PageKey pageKey, ByteBuffer page, boolean addPage) {
         throw DbException.getUnsupportedException("addLeafPage");
     }
 
     @Override
-    public void removeLeafPage(ByteBuffer key) {
+    public void removeLeafPage(PageKey pageKey) {
         throw DbException.getUnsupportedException("removeLeafPage");
     }
 
@@ -127,4 +172,8 @@ public abstract class StorageMapBase<K, V> implements StorageMap<K, V> {
         return (StorageMap<Object, Object>) this;
     }
 
+    @Override
+    public void setRootPage(ByteBuffer buff) {
+        throw DbException.getUnsupportedException("setRootPage");
+    }
 }

@@ -21,9 +21,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
+import java.util.List;
+import java.util.Map;
 
 import org.lealone.common.exceptions.DbException;
-import org.lealone.replication.ReplicationMap;
+import org.lealone.db.Session;
+import org.lealone.storage.replication.ReplicationMap;
 import org.lealone.storage.type.StorageDataType;
 
 public interface StorageMap<K, V> extends ReplicationMap {
@@ -50,12 +53,23 @@ public interface StorageMap<K, V> extends ReplicationMap {
     StorageDataType getValueType();
 
     /**
+     * Get the storage.
+     *
+     * @return the storage
+     */
+    Storage getStorage();
+
+    /**
      * Get a value.
      *
      * @param key the key
      * @return the value, or null if not found
      */
     V get(K key);
+
+    default V get(K key, int[] columnIndexes) {
+        return get(key);
+    }
 
     /**
      * Add or replace a key-value pair.
@@ -190,7 +204,16 @@ public interface StorageMap<K, V> extends ReplicationMap {
      * @param from the first key to return
      * @return the cursor
      */
+
     StorageMapCursor<K, V> cursor(K from);
+
+    default StorageMapCursor<K, V> cursor() {
+        return cursor((K) null);
+    }
+
+    default StorageMapCursor<K, V> cursor(IterationParameters<K> parameters) {
+        return cursor(parameters.from);
+    }
 
     /**
      * Remove all entries.
@@ -215,25 +238,45 @@ public interface StorageMap<K, V> extends ReplicationMap {
      */
     void close();
 
+    /**
+     * Save the map data to disk.
+     */
     void save();
+
+    K append(V value);
+
+    default void setMaxKey(Object key) {
+    }
+
+    default long getMaxKeyAsLong() {
+        return 0;
+    }
+
+    long incrementAndGetMaxKeyAsLong();
+
+    long getDiskSpaceUsed();
+
+    long getMemorySpaceUsed();
 
     void transferTo(WritableByteChannel target, K firstKey, K lastKey) throws IOException;
 
     void transferFrom(ReadableByteChannel src) throws IOException;
 
-    Storage getStorage();
+    void addLeafPage(PageKey pageKey, ByteBuffer page, boolean addPage);
 
-    K append(V value);
-
-    void addLeafPage(ByteBuffer splitKey, ByteBuffer page);
-
-    void removeLeafPage(ByteBuffer key);
+    void removeLeafPage(PageKey pageKey);
 
     LeafPageMovePlan prepareMoveLeafPage(LeafPageMovePlan leafPageMovePlan);
 
     StorageMap<Object, Object> getRawMap();
 
-    public default ByteBuffer readPage(ByteBuffer key, boolean last) {
+    public default ByteBuffer readPage(PageKey pageKey) {
         throw DbException.getUnsupportedException("readPage");
+    }
+
+    void setRootPage(ByteBuffer buff);
+
+    default Map<String, List<PageKey>> getEndpointToPageKeyMap(Session session, K from, K to) {
+        return null;
     }
 }

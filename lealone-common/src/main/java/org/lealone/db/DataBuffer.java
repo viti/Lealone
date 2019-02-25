@@ -26,11 +26,11 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
 import org.lealone.common.util.MathUtils;
 import org.lealone.common.util.Utils;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.SimpleResultSet;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
@@ -115,6 +115,14 @@ public class DataBuffer implements AutoCloseable {
         return new DataBuffer(handler, MIN_GROW);
     }
 
+    public static DataBuffer create(int capacity) {
+        return new DataBuffer(null, capacity);
+    }
+
+    public static DataBuffer create(ByteBuffer buff) {
+        return new DataBuffer(buff);
+    }
+
     protected DataBuffer() {
         this(null, MIN_GROW);
     }
@@ -123,6 +131,11 @@ public class DataBuffer implements AutoCloseable {
         this.handler = handler;
         reuse = ByteBuffer.allocate(capacity);
         buff = reuse;
+    }
+
+    protected DataBuffer(ByteBuffer buff) {
+        this.handler = null;
+        this.buff = reuse = buff;
     }
 
     public DataHandler getHandler() {
@@ -231,6 +244,33 @@ public class DataBuffer implements AutoCloseable {
         return buff.getInt();
     }
 
+    public short getUnsignedByte(int pos) {
+        return (short) (buff.get(pos) & 0xff);
+    }
+
+    public DataBuffer slice(int start, int end) {
+        int pos = buff.position();
+        int limit = buff.limit();
+        buff.position(start);
+        buff.limit(end);
+        ByteBuffer newBuffer = buff.slice();
+        buff.position(pos);
+        buff.limit(limit);
+        return new DataBuffer(newBuffer);
+    }
+
+    public DataBuffer getBuffer(int start, int end) {
+        byte[] bytes = new byte[end - start];
+        // 不能直接这样用，get的javadoc是错的，start应该是bytes的位置
+        // buff.get(bytes, start, end - start);
+        int pos = buff.position();
+        buff.position(start);
+        buff.get(bytes, 0, end - start);
+        buff.position(pos);
+        ByteBuffer newBuffer = ByteBuffer.wrap(bytes);
+        return new DataBuffer(newBuffer);
+    }
+
     /**
      * Copy a number of bytes to the given buffer from the current position. The
      * current position is incremented accordingly.
@@ -324,7 +364,7 @@ public class DataBuffer implements AutoCloseable {
      * @return this
      */
     public DataBuffer put(ByteBuffer src) {
-        ensureCapacity(buff.remaining()).put(src);
+        ensureCapacity(src.remaining()).put(src);
         return this;
     }
 
@@ -413,6 +453,18 @@ public class DataBuffer implements AutoCloseable {
     }
 
     /**
+     * Update a byte at the given index.
+     *
+     * @param index the index
+     * @param value the value
+     * @return this
+     */
+    public DataBuffer putByte(int index, byte value) {
+        buff.put(index, value);
+        return this;
+    }
+
+    /**
      * Clear the buffer after use.
      *
      * @return this
@@ -439,6 +491,14 @@ public class DataBuffer implements AutoCloseable {
     public ByteBuffer getAndFlipBuffer() {
         buff.flip();
         return buff;
+    }
+
+    public ByteBuffer getAndCopyBuffer() {
+        buff.flip();
+        ByteBuffer value = ByteBuffer.allocateDirect(buff.limit());
+        value.put(buff);
+        value.flip();
+        return value;
     }
 
     public ByteBuffer write(StorageDataType type, Object obj) {

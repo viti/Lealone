@@ -13,7 +13,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.sql.Connection;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.compress.CompressTool;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.security.SHA256;
@@ -25,6 +24,7 @@ import org.lealone.db.DataHandler;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
 import org.lealone.db.SysProperties;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.sql.expression.Expression;
 import org.lealone.storage.LobStorage;
 import org.lealone.storage.fs.FileStorage;
@@ -35,7 +35,7 @@ import org.lealone.storage.fs.FileUtils;
 /**
  * This class is the base for RunScript and Script.
  */
-abstract class ScriptBase extends ManipulateStatement implements DataHandler {
+abstract class ScriptBase extends ManipulationStatement implements DataHandler {
 
     /**
      * The default name of the script file if .zip compression is used.

@@ -14,12 +14,11 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Random;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
 import org.lealone.common.trace.TraceSystem;
-import org.lealone.common.util.New;
 import org.lealone.common.util.SmallLRUCache;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.User;
 import org.lealone.db.constraint.Constraint;
 import org.lealone.db.index.Index;
@@ -59,7 +58,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     private ConnectionInfo connectionInfo;
     private final User user;
     private final int id;
-    private final ArrayList<Table> locks = New.arrayList();
+    private final ArrayList<Table> locks = new ArrayList<>();
     private Random random;
     private int lockTimeout;
     private Value lastIdentity = ValueLong.get(0);
@@ -194,9 +193,9 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
 
     public ArrayList<Table> getLocalTempTables() {
         if (localTempTables == null) {
-            return New.arrayList();
+            return new ArrayList<>();
         }
-        return New.arrayList(localTempTables.values());
+        return new ArrayList<>(localTempTables.values());
     }
 
     /**
@@ -245,7 +244,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
 
     public HashMap<String, Index> getLocalTempTableIndexes() {
         if (localTempTableIndexes == null) {
-            return New.hashMap();
+            return new HashMap<>();
         }
         return localTempTableIndexes;
     }
@@ -302,7 +301,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
      */
     public HashMap<String, Constraint> getLocalTempTableConstraints() {
         if (localTempTableConstraints == null) {
-            return New.hashMap();
+            return new HashMap<>();
         }
         return localTempTableConstraints;
     }
@@ -458,6 +457,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
         return ps;
     }
 
+    @Override
     public Database getDatabase() {
         return database;
     }
@@ -710,7 +710,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     private void cleanTempTables(boolean closeSession) {
         if (localTempTables != null && localTempTables.size() > 0) {
             synchronized (database) {
-                for (Table table : New.arrayList(localTempTables.values())) {
+                for (Table table : new ArrayList<>(localTempTables.values())) {
                     if (closeSession || table.getOnCommitDrop()) {
                         modificationId++;
                         table.setModified();
@@ -911,7 +911,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
             DbException.throwInternalError();
         }
         if (unlinkLobMap == null) {
-            unlinkLobMap = New.hashMap();
+            unlinkLobMap = new HashMap<>();
         }
         unlinkLobMap.put(v.toString(), v);
     }
@@ -1019,8 +1019,9 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
 
     public Table[] getLocks() {
         // copy the data without synchronizing
-        ArrayList<Table> copy = New.arrayList();
-        for (int i = 0; i < locks.size(); i++) {
+        int size = locks.size();
+        ArrayList<Table> copy = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
             try {
                 copy.add(locks.get(i));
             } catch (Exception e) {
@@ -1073,7 +1074,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
             return;
         }
         if (temporaryResults == null) {
-            temporaryResults = New.hashSet();
+            temporaryResults = new HashSet<>();
         }
         if (temporaryResults.size() < 100) {
             // reference at most 100 result sets to avoid memory problems
@@ -1197,14 +1198,10 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
         return getTransaction(null);
     }
 
+    @Override
     public Transaction getTransaction(PreparedStatement p) {
         if (transaction != null)
             return transaction;
-
-        boolean autoCommit = this.autoCommit;
-        if (autoCommit && p != null && !p.isLocal() && p.isBatch()) { // 批量操作会当成一个分布式事务处理
-            autoCommit = false;
-        }
 
         boolean isShardingMode = isShardingMode();
         Transaction transaction = database.getTransactionEngine().beginTransaction(autoCommit, isShardingMode);
@@ -1222,7 +1219,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     }
 
     // 参与本次事务的其他Session
-    protected final Map<String, Session> sessionCache = New.hashMap();
+    protected final Map<String, Session> sessionCache = new HashMap<>();
 
     public Map<String, Session> getSessionCache() {
         return sessionCache;
@@ -1235,6 +1232,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     }
 
     // 得到的嵌套session会参与当前事务
+    @Override
     public Session getNestedSession(String hostAndPort, boolean remote) {
         // 不能直接把hostAndPort当成key，因为每个Session是对应到具体数据库的，所以URL中要包含数据库名
         String url = getURL(hostAndPort);
@@ -1343,12 +1341,15 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
     @SuppressWarnings("unchecked")
     @Override
     public StorageMap<Object, Object> getStorageMap(String mapName) {
+        // 数据库可能还没有初始化，这时事务引擎中就找不到对应的Map
+        if (!database.isInitialized())
+            database.init();
         TransactionEngine transactionEngine = database.getTransactionEngine();
         return (StorageMap<Object, Object>) transactionEngine.getTransactionMap(mapName).getInstance(getTransaction());
     }
 
     @Override
-    public void addRootPages(String dbName, ByteBuffer rootPages) {
+    public void replicateRootPages(String dbName, ByteBuffer rootPages) {
         Database database = LealoneDatabase.getInstance().getDatabase(dbName);
         if (!database.isInitialized()) {
             database.init();
@@ -1357,7 +1358,7 @@ public class ServerSession extends SessionBase implements Transaction.Validator 
         for (int i = 0; i < size; i++) {
             String mapName = ValueString.type.read(rootPages);
             StorageMap<?, ?> map = database.getStorageMap(mapName);
-            map.addLeafPage(null, rootPages);
+            map.setRootPage(rootPages);
             if (i == 0) {
                 database = database.copy();
             }

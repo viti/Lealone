@@ -24,7 +24,6 @@ import java.util.Locale;
 import java.util.TimeZone;
 import java.util.regex.PatternSyntaxException;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.compress.CompressTool;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.security.BlockCipher;
@@ -34,7 +33,6 @@ import org.lealone.common.util.DataUtils;
 import org.lealone.common.util.DateTimeUtils;
 import org.lealone.common.util.JdbcUtils;
 import org.lealone.common.util.MathUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Utils;
@@ -44,14 +42,12 @@ import org.lealone.db.Csv;
 import org.lealone.db.Database;
 import org.lealone.db.Mode;
 import org.lealone.db.ServerSession;
-import org.lealone.db.expression.ExpressionVisitor;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.Sequence;
 import org.lealone.db.service.ServiceExecuterManager;
 import org.lealone.db.table.Column;
-import org.lealone.db.table.ColumnResolver;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.util.AutoCloseInputStream;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
@@ -71,9 +67,12 @@ import org.lealone.db.value.ValueUuid;
 import org.lealone.sql.Parser;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
+import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.SequenceValue;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.Variable;
+import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.storage.fs.FileUtils;
 
 /**
@@ -122,8 +121,8 @@ public class Function extends Expression implements FunctionCall {
     private static final int VAR_ARGS = -1;
     private static final long PRECISION_UNKNOWN = -1;
 
-    private static final HashMap<String, FunctionInfo> FUNCTIONS = New.hashMap();
-    private static final HashMap<String, Integer> DATE_PART = New.hashMap();
+    private static final HashMap<String, FunctionInfo> FUNCTIONS = new HashMap<>();
+    private static final HashMap<String, Integer> DATE_PART = new HashMap<>();
     private static final char[] SOUNDEX_INDEX = new char[128];
 
     protected Expression[] args;
@@ -385,7 +384,7 @@ public class Function extends Expression implements FunctionCall {
         this.database = database;
         this.info = info;
         if (info.parameterCount == VAR_ARGS) {
-            varArgs = New.arrayList();
+            varArgs = new ArrayList<>(4);
         } else {
             args = new Expression[info.parameterCount];
         }
@@ -1729,7 +1728,9 @@ public class Function extends Expression implements FunctionCall {
     @Override
     public void mapColumns(ColumnResolver resolver, int level) {
         for (Expression e : args) {
-            e.mapColumns(resolver, level);
+            if (e != null) {
+                e.mapColumns(resolver, level);
+            }
         }
     }
 
@@ -1838,7 +1839,11 @@ public class Function extends Expression implements FunctionCall {
     public Expression optimize(ServerSession session) {
         boolean allConst = info.deterministic;
         for (int i = 0; i < args.length; i++) {
-            Expression e = args[i].optimize(session);
+            Expression e = args[i];
+            if (e == null) {
+                continue;
+            }
+            e = e.optimize(session);
             args[i] = e;
             if (!e.isConstant()) {
                 allConst = false;
@@ -2114,6 +2119,19 @@ public class Function extends Expression implements FunctionCall {
     @Override
     public String getSQL(boolean isDistributed) {
         StatementBuilder buff = new StatementBuilder(info.name);
+        if (info.type == CASE) {
+            if (args[0] != null) {
+                buff.append(" ").append(args[0].getSQL());
+            }
+            for (int i = 1, len = args.length - 1; i < len; i += 2) {
+                buff.append(" WHEN ").append(args[i].getSQL());
+                buff.append(" THEN ").append(args[i + 1].getSQL());
+            }
+            if (args.length % 2 == 0) {
+                buff.append(" ELSE ").append(args[args.length - 1].getSQL());
+            }
+            return buff.append(" END").toString();
+        }
         buff.append('(');
         switch (info.type) {
         case CAST: {

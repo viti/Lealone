@@ -34,12 +34,18 @@ public class Constants {
 
     public static final String DEFAULT_CONTAINER_ENGINE_NAME = "CGROUP";
 
+    public static final String DEFAULT_NET_FACTORY_NAME = "nio";
+
+    public static final String NET_FACTORY_NAME_KEY = "NET_FACTORY_NAME";
+
     public static final char NAME_SEPARATOR = '_';
+
+    public static final String RESOURCES_DIR = "/org/lealone/common/resources/";
 
     /**
      * The major version of this database.
      */
-    public static final int VERSION_MAJOR = 3;
+    public static final int VERSION_MAJOR = 5;
 
     /**
      * The minor version of this database.
@@ -49,7 +55,7 @@ public class Constants {
     /**
      * The build date is updated for each public release.
      */
-    public static final String BUILD_DATE = "2016-04-15";
+    public static final String BUILD_DATE = "2018-09-01";
 
     /**
      * The build id is incremented for each public release.

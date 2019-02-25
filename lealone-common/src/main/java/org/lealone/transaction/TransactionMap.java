@@ -21,6 +21,7 @@ package org.lealone.transaction;
 import java.util.Iterator;
 import java.util.Map.Entry;
 
+import org.lealone.storage.IterationParameters;
 import org.lealone.storage.StorageMap;
 
 public interface TransactionMap<K, V> extends StorageMap<K, V> {
@@ -66,6 +67,8 @@ public interface TransactionMap<K, V> extends StorageMap<K, V> {
      */
     public Iterator<Entry<K, V>> entryIterator(K from);
 
+    public Iterator<Entry<K, V>> entryIterator(IterationParameters<K> parameters);
+
     /**
      * Iterate over keys.
      *
@@ -82,5 +85,7 @@ public interface TransactionMap<K, V> extends StorageMap<K, V> {
      * @return the iterator
      */
     public Iterator<K> keyIterator(K from, boolean includeUncommitted);
+
+    public V put(K key, V oldValue, V newValue, int[] columnIndexes);
 
 }

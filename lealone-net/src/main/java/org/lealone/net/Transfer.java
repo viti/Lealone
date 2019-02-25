@@ -11,7 +11,6 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
@@ -19,7 +18,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.security.SHA256;
 import org.lealone.common.util.DataUtils;
@@ -29,6 +27,7 @@ import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Utils;
 import org.lealone.db.DataBuffer;
 import org.lealone.db.Session;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.SimpleResultSet;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
@@ -53,9 +52,7 @@ import org.lealone.db.value.ValueStringIgnoreCase;
 import org.lealone.db.value.ValueTime;
 import org.lealone.db.value.ValueTimestamp;
 import org.lealone.db.value.ValueUuid;
-
-import io.vertx.core.buffer.Buffer;
-import io.vertx.core.net.NetSocket;
+import org.lealone.storage.PageKey;
 
 /**
  * The transfer class is used to send and receive Value objects.
@@ -66,43 +63,53 @@ import io.vertx.core.net.NetSocket;
  */
 public class Transfer implements NetSerializer {
 
-    private static final int BUFFER_SIZE = 4 * 1024;
+    public static final int BUFFER_SIZE = 4 * 1024;
     private static final int LOB_MAGIC = 0x1234;
     private static final int LOB_MAC_SALT_LENGTH = 16;
 
     static final byte REQUEST = 1;
     private static final byte RESPONSE = 2;
 
-    private AsyncConnection conn;
-    private NetSocket socket;
+    private TransferConnection conn;
+    private WritableChannel writableChannel;
     private Session session;
     private DataInputStream in;
     private final DataOutputStream out;
     private final ResettableBufferOutputStream resettableOutputStream;
 
-    public Transfer(AsyncConnection conn, NetSocket socket, Session session) {
-        this(conn, socket, (Buffer) null);
+    public Transfer(TransferConnection conn, WritableChannel writableChannel) {
+        this.conn = conn;
+        this.writableChannel = writableChannel;
+
+        resettableOutputStream = new ResettableBufferOutputStream(writableChannel, BUFFER_SIZE);
+        out = new DataOutputStream(resettableOutputStream);
+    }
+
+    public Transfer(TransferConnection conn, WritableChannel writableChannel, Session session) {
+        this(conn, writableChannel);
         this.session = session;
     }
 
-    public Transfer(AsyncConnection conn, NetSocket socket, Buffer inBuffer) {
-        this.conn = conn;
-        this.socket = socket;
-
-        resettableOutputStream = new ResettableBufferOutputStream(BUFFER_SIZE);
-        out = new DataOutputStream(resettableOutputStream);
-
+    public Transfer(TransferConnection conn, WritableChannel writableChannel, NetBuffer inBuffer) {
+        this(conn, writableChannel);
         if (inBuffer != null) {
-            BufferInputStream bufferInputStream = new BufferInputStream(inBuffer);
-            in = new DataInputStream(bufferInputStream);
+            in = new DataInputStream(new NetBufferInputStream(inBuffer));
         }
     }
 
-    public Transfer copy(Session session) {
-        return new Transfer(conn, socket, session);
+    public int getDataOutputStreamSize() {
+        return out.size();
     }
 
-    public AsyncConnection getAsyncConnection() {
+    public void setPayloadSize(int payloadStartPos, int size) {
+        resettableOutputStream.setPayloadSize(payloadStartPos, size);
+    }
+
+    public Transfer copy(Session session) {
+        return new Transfer(conn, writableChannel, session);
+    }
+
+    public TransferConnection getTransferConnection() {
         return conn;
     }
 
@@ -180,16 +187,14 @@ public class Transfer implements NetSerializer {
      * Write pending changes.
      */
     public void flush() throws IOException {
-        resettableOutputStream.writePacketLength();
-        socket.write(resettableOutputStream.buffer);
-        resettableOutputStream.reset();
+        resettableOutputStream.flush();
     }
 
     /**
      * Close the transfer object.
      */
     public void close() {
-        if (socket != null) {
+        if (writableChannel != null) {
             try {
                 if (out.size() > 4)
                     flush();
@@ -198,13 +203,13 @@ public class Transfer implements NetSerializer {
             } finally {
                 conn = null;
                 session = null;
-                socket = null;
+                writableChannel = null;
             }
         }
     }
 
     public boolean isClosed() {
-        return socket == null;
+        return writableChannel == null;
     }
 
     /**
@@ -459,6 +464,20 @@ public class Transfer implements NetSerializer {
      */
     public void readBytes(byte[] buff, int off, int len) throws IOException {
         in.readFully(buff, off, len);
+    }
+
+    @Override
+    public Transfer writePageKey(PageKey pk) throws IOException {
+        writeValue((Value) pk.key);
+        writeBoolean(pk.first);
+        return this;
+    }
+
+    @Override
+    public PageKey readPageKey() throws IOException {
+        Object value = readValue();
+        boolean first = readBoolean();
+        return new PageKey(value, first);
     }
 
     /**
@@ -821,58 +840,39 @@ public class Transfer implements NetSerializer {
         }
     }
 
-    private static class BufferInputStream extends InputStream {
-        final Buffer buffer;
-        final int size;
-        int pos;
+    private static class ResettableBufferOutputStream extends NetBufferOutputStream {
 
-        BufferInputStream(Buffer buffer) {
-            this.buffer = buffer;
-            size = buffer.length();
+        ResettableBufferOutputStream(WritableChannel writableChannel, int initialSizeHint) {
+            super(writableChannel, initialSizeHint);
         }
 
         @Override
-        public int available() throws IOException {
-            return size - pos;
+        public void flush() throws IOException {
+            writePacketLength();
+            super.flush();
         }
 
         @Override
-        public int read() throws IOException {
-            return buffer.getUnsignedByte(pos++);
-        }
-    }
-
-    private static class ResettableBufferOutputStream extends OutputStream {
-        Buffer buffer;
-        final int initialSizeHint;
-
-        ResettableBufferOutputStream(int initialSizeHint) {
-            this.initialSizeHint = initialSizeHint;
-            reset();
-        }
-
-        @Override
-        public void write(int b) {
-            buffer.appendByte((byte) b);
-        }
-
-        @Override
-        public void write(byte b[], int off, int len) {
-            buffer.appendBytes(b, off, len);
-        }
-
-        void reset() {
-            buffer = Buffer.buffer(initialSizeHint);
+        protected void reset() {
+            super.reset();
             buffer.appendInt(0); // write packet header for next
         }
 
-        void writePacketLength() {
+        private void writePacketLength() {
             int v = buffer.length() - 4;
             buffer.setByte(0, (byte) ((v >>> 24) & 0xFF));
             buffer.setByte(1, (byte) ((v >>> 16) & 0xFF));
             buffer.setByte(2, (byte) ((v >>> 8) & 0xFF));
             buffer.setByte(3, (byte) (v & 0xFF));
         }
-    }
 
+        public void setPayloadSize(int payloadStartPos, int size) {
+            payloadStartPos += 4;
+            int v = size;
+            buffer.setByte(payloadStartPos, (byte) ((v >>> 24) & 0xFF));
+            buffer.setByte(payloadStartPos + 1, (byte) ((v >>> 16) & 0xFF));
+            buffer.setByte(payloadStartPos + 2, (byte) ((v >>> 8) & 0xFF));
+            buffer.setByte(payloadStartPos + 3, (byte) (v & 0xFF));
+        }
+    }
 }

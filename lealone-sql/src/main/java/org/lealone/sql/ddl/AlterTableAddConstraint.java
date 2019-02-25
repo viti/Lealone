@@ -9,12 +9,11 @@ package org.lealone.sql.ddl;
 import java.util.ArrayList;
 import java.util.HashSet;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.db.Constants;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.Right;
 import org.lealone.db.constraint.Constraint;
 import org.lealone.db.constraint.ConstraintCheck;
@@ -26,9 +25,9 @@ import org.lealone.db.schema.Schema;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.sql.SQLStatement;
 import org.lealone.sql.expression.Expression;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents the statement
@@ -54,7 +53,7 @@ public class AlterTableAddConstraint extends SchemaStatement {
     private boolean checkExisting;
     private boolean primaryKeyHash;
     private final boolean ifNotExists;
-    private final ArrayList<Index> createdIndexes = New.arrayList();
+    private final ArrayList<Index> createdIndexes = new ArrayList<>();
 
     public AlterTableAddConstraint(ServerSession session, Schema schema, boolean ifNotExists) {
         super(session, schema);
@@ -177,7 +176,7 @@ public class AlterTableAddConstraint extends SchemaStatement {
             checkExpression.mapColumns(filter, 0);
             checkExpression = checkExpression.optimize(session);
             check.setExpression(checkExpression);
-            check.setTableFilter(filter);
+            check.setExpressionEvaluator(filter);
             constraint = check;
             if (checkExisting) {
                 check.checkExistingData(session);
@@ -313,7 +312,7 @@ public class AlterTableAddConstraint extends SchemaStatement {
         if (indexCols.length > cols.length) {
             return false;
         }
-        HashSet<Column> set = New.hashSet();
+        HashSet<Column> set = new HashSet<>(cols.length);
         for (IndexColumn c : cols) {
             set.add(c.column);
         }

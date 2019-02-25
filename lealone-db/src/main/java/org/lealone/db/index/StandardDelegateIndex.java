@@ -6,6 +6,7 @@
 package org.lealone.db.index;
 
 import java.util.List;
+import java.util.Map;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.ServerSession;
@@ -15,8 +16,9 @@ import org.lealone.db.result.SortOrder;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.StandardTable;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.ValueLong;
+import org.lealone.storage.IterationParameters;
+import org.lealone.storage.PageKey;
 
 /**
  * An index that delegates indexing to another index.
@@ -27,8 +29,8 @@ public class StandardDelegateIndex extends IndexBase implements StandardIndex {
 
     public StandardDelegateIndex(StandardTable table, int id, String name, StandardPrimaryIndex mainIndex,
             IndexType indexType) {
-        super(table, id, name, indexType, IndexColumn.wrap(new Column[] { table.getColumn(mainIndex
-                .getMainIndexColumn()) }));
+        super(table, id, name, indexType,
+                IndexColumn.wrap(new Column[] { table.getColumn(mainIndex.getMainIndexColumn()) }));
         this.mainIndex = mainIndex;
         if (id < 0) {
             throw DbException.throwInternalError("" + name);
@@ -70,6 +72,11 @@ public class StandardDelegateIndex extends IndexBase implements StandardIndex {
     }
 
     @Override
+    public Cursor find(ServerSession session, IterationParameters<SearchRow> parameters) {
+        return mainIndex.find(session, parameters);
+    }
+
+    @Override
     public Cursor findFirstOrLast(ServerSession session, boolean first) {
         return mainIndex.findFirstOrLast(session, first);
     }
@@ -83,8 +90,8 @@ public class StandardDelegateIndex extends IndexBase implements StandardIndex {
     }
 
     @Override
-    public double getCost(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder) {
-        return 10 * getCostRangeIndex(masks, mainIndex.getRowCountApproximation(), filter, sortOrder);
+    public double getCost(ServerSession session, int[] masks, SortOrder sortOrder) {
+        return 10 * getCostRangeIndex(masks, mainIndex.getRowCountApproximation(), sortOrder);
     }
 
     @Override
@@ -124,7 +131,12 @@ public class StandardDelegateIndex extends IndexBase implements StandardIndex {
 
     @Override
     public long getDiskSpaceUsed() {
-        return 0;
+        return mainIndex.getDiskSpaceUsed();
+    }
+
+    @Override
+    public long getMemorySpaceUsed() {
+        return mainIndex.getMemorySpaceUsed();
     }
 
     @Override
@@ -132,4 +144,8 @@ public class StandardDelegateIndex extends IndexBase implements StandardIndex {
         return mainIndex.isInMemory();
     }
 
+    @Override
+    public Map<String, List<PageKey>> getEndpointToPageKeyMap(ServerSession session, SearchRow first, SearchRow last) {
+        return mainIndex.getEndpointToPageKeyMap(session, first, last);
+    }
 }

@@ -14,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -23,20 +24,20 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.lealone.api.DatabaseEventListener;
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
 import org.lealone.common.trace.TraceSystem;
 import org.lealone.common.util.BitField;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.common.util.MathUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.ShutdownHookUtils;
 import org.lealone.common.util.SmallLRUCache;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.TempFileDeleter;
 import org.lealone.common.util.Utils;
+import org.lealone.db.api.DatabaseEventListener;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.Right;
 import org.lealone.db.auth.Role;
 import org.lealone.db.auth.User;
@@ -58,11 +59,11 @@ import org.lealone.db.table.Table;
 import org.lealone.db.table.TableAlterHistoryRecord;
 import org.lealone.db.table.TableView;
 import org.lealone.db.util.SourceCompiler;
-import org.lealone.db.value.CaseInsensitiveMap;
 import org.lealone.db.value.CompareMode;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueInt;
 import org.lealone.net.NetEndpoint;
+import org.lealone.net.NetEndpointManagerHolder;
 import org.lealone.sql.SQLEngine;
 import org.lealone.sql.SQLEngineManager;
 import org.lealone.sql.SQLParser;
@@ -74,6 +75,7 @@ import org.lealone.storage.StorageMap;
 import org.lealone.storage.fs.FileStorage;
 import org.lealone.storage.fs.FileUtils;
 import org.lealone.storage.memory.MemoryStorageEngine;
+import org.lealone.storage.replication.ReplicationSession;
 import org.lealone.transaction.TransactionEngine;
 import org.lealone.transaction.TransactionEngineManager;
 
@@ -83,7 +85,7 @@ import org.lealone.transaction.TransactionEngineManager;
  * @author H2 Group
  * @author zhh
  */
-public class Database implements DataHandler, DbObject {
+public class Database implements DataHandler, DbObject, IDatabase {
 
     /**
      * The default name of the system user. This name is only used as long as
@@ -91,14 +93,14 @@ public class Database implements DataHandler, DbObject {
      */
     private static final String SYSTEM_USER_NAME = "DBA";
 
-    private final HashMap<String, User> users = New.hashMap();
-    private final HashMap<String, Role> roles = New.hashMap();
-    private final HashMap<String, Right> rights = New.hashMap();
-    private final HashMap<String, UserDataType> userDataTypes = New.hashMap();
-    private final HashMap<String, UserAggregate> aggregates = New.hashMap();
-    private final HashMap<String, Setting> settings = New.hashMap();
-    private final HashMap<String, Comment> comments = New.hashMap();
-    private final HashMap<String, Schema> schemas = New.hashMap();
+    private final HashMap<String, User> users = new HashMap<>();
+    private final HashMap<String, Role> roles = new HashMap<>();
+    private final HashMap<String, Right> rights = new HashMap<>();
+    private final HashMap<String, UserDataType> userDataTypes = new HashMap<>();
+    private final HashMap<String, UserAggregate> aggregates = new HashMap<>();
+    private final HashMap<String, Setting> settings = new HashMap<>();
+    private final HashMap<String, Comment> comments = new HashMap<>();
+    private final HashMap<String, Schema> schemas = new HashMap<>();
 
     // 与users、roles和rights相关的操作都用这个对象进行同步
     private final Object authLock = new Object();
@@ -174,10 +176,11 @@ public class Database implements DataHandler, DbObject {
     private final SQLEngine sqlEngine;
     private final TransactionEngine transactionEngine;
 
-    private String storageName; // 不使用原始的名称，而是用id替换数据库名
+    private String storagePath; // 不使用原始的名称，而是用id替换数据库名
 
     private Map<String, String> replicationProperties;
     private ReplicationPropertiesChangeListener replicationPropertiesChangeListener;
+    private Map<String, String> endpointAssignmentProperties;
 
     private RunMode runMode = RunMode.CLIENT_SERVER;
     private ConnectionInfo lastConnectionInfo;
@@ -185,7 +188,7 @@ public class Database implements DataHandler, DbObject {
     public Database(int id, String name, Map<String, String> parameters) {
         this.id = id;
         this.name = name;
-        this.storageName = getStorageName();
+        this.storagePath = getStoragePath();
         if (parameters != null) {
             dbSettings = DbSettings.getInstance(parameters);
             this.parameters = parameters;
@@ -240,6 +243,7 @@ public class Database implements DataHandler, DbObject {
         return name;
     }
 
+    @Override
     public String getShortName() {
         return getName();
     }
@@ -272,6 +276,7 @@ public class Database implements DataHandler, DbObject {
         return dbSettings.defaultStorageEngine;
     }
 
+    @Override
     public Map<String, String> getReplicationProperties() {
         return replicationProperties;
     }
@@ -290,16 +295,27 @@ public class Database implements DataHandler, DbObject {
         void replicationPropertiesChanged(Database db);
     }
 
+    @Override
+    public Map<String, String> getEndpointAssignmentProperties() {
+        return endpointAssignmentProperties;
+    }
+
+    public void setEndpointAssignmentProperties(Map<String, String> endpointAssignmentProperties) {
+        this.endpointAssignmentProperties = endpointAssignmentProperties;
+    }
+
     public void setRunMode(RunMode runMode) {
         if (runMode != null && this.runMode != runMode) {
             this.runMode = runMode;
         }
     }
 
+    @Override
     public RunMode getRunMode() {
         return runMode;
     }
 
+    @Override
     public Map<String, String> getParameters() {
         return parameters;
     }
@@ -308,6 +324,7 @@ public class Database implements DataHandler, DbObject {
         parameters.putAll(newParameters);
     }
 
+    @Override
     public boolean isShardingMode() {
         return runMode == RunMode.SHARDING;
     }
@@ -315,11 +332,12 @@ public class Database implements DataHandler, DbObject {
     public synchronized Database copy() {
         Database db = new Database(id, name, parameters);
         // 因为每个存储只能打开一次，所以要复用原有存储
-        db.storageName = storageName;
-        db.storageBuilder = storageBuilder;
+        db.storagePath = storagePath;
+        db.storageBuilders.putAll(storageBuilders);
         db.storages.putAll(storages);
         db.runMode = runMode;
         db.replicationProperties = replicationProperties;
+        db.replicationProperties = endpointAssignmentProperties;
         db.lastConnectionInfo = lastConnectionInfo;
         db.init();
         LealoneDatabase.getInstance().getDatabasesMap().put(name, db);
@@ -362,7 +380,7 @@ public class Database implements DataHandler, DbObject {
 
     private void initTraceSystem() {
         if (persistent) {
-            traceSystem = new TraceSystem(getStorageName() + Constants.SUFFIX_TRACE_FILE);
+            traceSystem = new TraceSystem(getStoragePath() + Constants.SUFFIX_TRACE_FILE);
             traceSystem.setLevelFile(dbSettings.traceLevelFile);
             traceSystem.setLevelSystemOut(dbSettings.traceLevelSystemOut);
             trace = traceSystem.getTrace(Trace.DATABASE);
@@ -402,10 +420,7 @@ public class Database implements DataHandler, DbObject {
 
             systemSession = new SystemSession(this, systemUser, ++nextSessionId);
 
-            // long t1 = System.currentTimeMillis();
             openMetaTable();
-            // System.out.println(getShortName() + ": openMetaTable total time: " + (System.currentTimeMillis() - t1)
-            // + " ms");
 
             if (!readOnly) {
                 // set CREATE_BUILD in a new database
@@ -460,7 +475,7 @@ public class Database implements DataHandler, DbObject {
         IndexType indexType = IndexType.createDelegate(); // 重用原有的primary index
         metaIdIndex = meta.addIndex(systemSession, "SYS_ID", 0, pkCols, indexType, true, null);
 
-        ArrayList<MetaRecord> records = New.arrayList();
+        ArrayList<MetaRecord> records = new ArrayList<>();
         Cursor cursor = metaIdIndex.find(systemSession, null, null);
         while (cursor.next()) {
             MetaRecord rec = new MetaRecord(cursor.get());
@@ -481,7 +496,7 @@ public class Database implements DataHandler, DbObject {
     }
 
     public synchronized void rollbackMetaTable(ServerSession session) {
-        ArrayList<MetaRecord> records = New.arrayList();
+        ArrayList<MetaRecord> records = new ArrayList<>();
         Cursor cursor = metaIdIndex.find(systemSession, null, null);
         while (cursor.next()) {
             MetaRecord rec = new MetaRecord(cursor.get());
@@ -1030,6 +1045,7 @@ public class Database implements DataHandler, DbObject {
         return session;
     }
 
+    @Override
     public ServerSession createInternalSession() {
         // User admin = null;
         // for (User user : getAllUsers()) {
@@ -1234,11 +1250,11 @@ public class Database implements DataHandler, DbObject {
     }
 
     public ArrayList<UserAggregate> getAllAggregates() {
-        return New.arrayList(aggregates.values());
+        return new ArrayList<>(aggregates.values());
     }
 
     public ArrayList<Comment> getAllComments() {
-        return New.arrayList(comments.values());
+        return new ArrayList<>(comments.values());
     }
 
     public int getAllowLiterals() {
@@ -1249,12 +1265,12 @@ public class Database implements DataHandler, DbObject {
     }
 
     public ArrayList<Right> getAllRights() {
-        return New.arrayList(rights.values());
+        return new ArrayList<>(rights.values());
     }
 
     public ArrayList<Role> getAllRoles() {
         synchronized (getAuthLock()) {
-            return New.arrayList(roles.values());
+            return new ArrayList<>(roles.values());
         }
     }
 
@@ -1265,7 +1281,7 @@ public class Database implements DataHandler, DbObject {
      */
     public ArrayList<SchemaObject> getAllSchemaObjects() {
         initMetaTables();
-        ArrayList<SchemaObject> list = New.arrayList();
+        ArrayList<SchemaObject> list = new ArrayList<>();
         for (Schema schema : schemas.values()) {
             list.addAll(schema.getAll());
         }
@@ -1282,7 +1298,7 @@ public class Database implements DataHandler, DbObject {
         if (type == DbObjectType.TABLE_OR_VIEW) {
             initMetaTables();
         }
-        ArrayList<SchemaObject> list = New.arrayList();
+        ArrayList<SchemaObject> list = new ArrayList<>();
         for (Schema schema : schemas.values()) {
             list.addAll(schema.getAll(type));
         }
@@ -1301,7 +1317,7 @@ public class Database implements DataHandler, DbObject {
         if (includeMeta) {
             initMetaTables();
         }
-        ArrayList<Table> list = New.arrayList();
+        ArrayList<Table> list = new ArrayList<>();
         for (Schema schema : schemas.values()) {
             list.addAll(schema.getAllTablesAndViews());
         }
@@ -1310,20 +1326,20 @@ public class Database implements DataHandler, DbObject {
 
     public ArrayList<Schema> getAllSchemas() {
         initMetaTables();
-        return New.arrayList(schemas.values());
+        return new ArrayList<>(schemas.values());
     }
 
     public ArrayList<Setting> getAllSettings() {
-        return New.arrayList(settings.values());
+        return new ArrayList<>(settings.values());
     }
 
     public ArrayList<UserDataType> getAllUserDataTypes() {
-        return New.arrayList(userDataTypes.values());
+        return new ArrayList<>(userDataTypes.values());
     }
 
     public ArrayList<User> getAllUsers() {
         synchronized (getAuthLock()) {
-            return New.arrayList(users.values());
+            return new ArrayList<>(users.values());
         }
     }
 
@@ -1334,7 +1350,7 @@ public class Database implements DataHandler, DbObject {
     @Override
     public String getDatabasePath() {
         if (persistent) {
-            return getStorageName();
+            return getStoragePath();
         }
         return null;
     }
@@ -1351,7 +1367,7 @@ public class Database implements DataHandler, DbObject {
         // need to synchronized on userSession, otherwise the list
         // may contain null elements
         synchronized (userSessions) {
-            list = New.arrayList(userSessions);
+            list = new ArrayList<>(userSessions);
         }
         // copy, to ensure the reference is stable
         ServerSession sys = systemSession;
@@ -1416,20 +1432,20 @@ public class Database implements DataHandler, DbObject {
     public String createTempFile() {
         try {
             boolean inTempDir = readOnly;
-            String name = getStorageName();
+            String name = getStoragePath();
             if (!persistent) {
                 name = "memFS:" + name;
             }
             return FileUtils.createTempFile(name, Constants.SUFFIX_TEMP_FILE, true, inTempDir);
         } catch (IOException e) {
-            throw DbException.convertIOException(e, getStorageName());
+            throw DbException.convertIOException(e, getStoragePath());
         }
     }
 
     private void deleteOldTempFiles() {
-        String path = FileUtils.getParent(getStorageName());
+        String path = FileUtils.getParent(getStoragePath());
         for (String name : FileUtils.newDirectoryStream(path)) {
-            if (name.endsWith(Constants.SUFFIX_TEMP_FILE) && name.startsWith(getStorageName())) {
+            if (name.endsWith(Constants.SUFFIX_TEMP_FILE) && name.startsWith(getStoragePath())) {
                 // can't always delete the files, they may still be open
                 FileUtils.tryDelete(name);
             }
@@ -1496,7 +1512,7 @@ public class Database implements DataHandler, DbObject {
             return null;
         default:
         }
-        HashSet<DbObject> set = New.hashSet();
+        HashSet<DbObject> set = new HashSet<>();
         for (Table t : getAllTablesAndViews(false)) {
             if (except == t) {
                 continue;
@@ -1717,20 +1733,6 @@ public class Database implements DataHandler, DbObject {
         }
     }
 
-    /**
-     * Synchronize the files with the file system. This method is called when
-     * executing the SQL statement CHECKPOINT SYNC.
-     */
-    public synchronized void sync() {
-        if (readOnly) {
-            return;
-        }
-
-        for (Storage s : getStorages()) {
-            s.save();
-        }
-    }
-
     public int getMaxMemoryRows() {
         return maxMemoryRows;
     }
@@ -1895,6 +1897,7 @@ public class Database implements DataHandler, DbObject {
      *
      * @return true if the database is still starting
      */
+    @Override
     public boolean isStarting() {
         return starting;
     }
@@ -2007,11 +2010,22 @@ public class Database implements DataHandler, DbObject {
      */
     public void checkpoint() {
         if (persistent) {
-            for (Storage s : getStorages()) {
-                s.save();
-            }
+            transactionEngine.checkpoint();
         }
         getTempFileDeleter().deleteUnused();
+    }
+
+    /**
+     * Synchronize the files with the file system. This method is called when
+     * executing the SQL statement CHECKPOINT SYNC.
+     */
+    public synchronized void sync() {
+        if (readOnly) {
+            return;
+        }
+        for (Storage s : getStorages()) {
+            s.save();
+        }
     }
 
     /**
@@ -2106,11 +2120,10 @@ public class Database implements DataHandler, DbObject {
         }
     }
 
-    // 每个数据库只有一个StorageBuilder
-    private StorageBuilder storageBuilder;
-
+    private final ConcurrentHashMap<String, StorageBuilder> storageBuilders = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Storage> storages = new ConcurrentHashMap<>();
 
+    @Override
     public List<Storage> getStorages() {
         return new ArrayList<>(storages.values());
     }
@@ -2135,41 +2148,43 @@ public class Database implements DataHandler, DbObject {
         return storages.get(storageEngineName);
     }
 
-    private String getStorageName() {
-        if (storageName != null)
-            return storageName;
+    private String getStoragePath() {
+        if (storagePath != null)
+            return storagePath;
         String baseDir = SysProperties.getBaseDir();
         if (baseDir != null && !baseDir.endsWith(File.separator))
             baseDir = baseDir + File.separator;
 
         if (baseDir == null)
-            storageName = "." + File.separator;
+            storagePath = "." + File.separator;
         else
-            storageName = baseDir;
+            storagePath = baseDir;
 
-        storageName = storageName + "db" + Constants.NAME_SEPARATOR + id;
+        storagePath = storagePath + "db" + Constants.NAME_SEPARATOR + id;
         try {
-            storageName = new File(storageName).getCanonicalPath();
+            storagePath = new File(storagePath).getCanonicalPath();
         } catch (IOException e) {
             throw DbException.convert(e);
         }
-        return storageName;
+        return storagePath;
     }
 
     public synchronized StorageBuilder getStorageBuilder(StorageEngine storageEngine) {
+        StorageBuilder storageBuilder = storageBuilders.get(storageEngine.getName());
         if (storageBuilder != null)
             return storageBuilder;
 
-        StorageBuilder builder = storageEngine.getStorageBuilder();
+        storageBuilder = storageEngine.getStorageBuilder();
+        storageBuilders.put(storageEngine.getName(), storageBuilder);
         if (!persistent) {
-            builder.inMemory();
+            storageBuilder.inMemory();
         } else {
-            String storageName = getStorageName();
+            String storagePath = getStoragePath();
             byte[] key = getFileEncryptionKey();
-            builder.pageSplitSize(getPageSize());
-            builder.storageName(storageName);
+            storageBuilder.pageSplitSize(getPageSize());
+            storageBuilder.storagePath(storagePath);
             if (isReadOnly()) {
-                builder.readOnly();
+                storageBuilder.readOnly();
             }
 
             if (key != null) {
@@ -2177,23 +2192,25 @@ public class Database implements DataHandler, DbObject {
                 for (int i = 0; i < password.length; i++) {
                     password[i] = (char) (((key[i + i] & 255) << 16) | ((key[i + i + 1]) & 255));
                 }
-                builder.encryptionKey(password);
+                storageBuilder.encryptionKey(password);
             }
             if (getSettings().compressData) {
-                builder.compress();
+                storageBuilder.compress();
                 // use a larger page split size to improve the compression ratio
-                builder.pageSplitSize(64 * 1024);
+                int pageSize = getPageSize();
+                int compressPageSize = 64 * 1024;
+                if (pageSize > compressPageSize)
+                    compressPageSize = pageSize;
+                storageBuilder.pageSplitSize(compressPageSize);
             }
-            builder.backgroundExceptionHandler(new UncaughtExceptionHandler() {
+            storageBuilder.backgroundExceptionHandler(new UncaughtExceptionHandler() {
                 @Override
                 public void uncaughtException(Thread t, Throwable e) {
                     setBackgroundException(DbException.convert(e));
                 }
             });
-            builder.db(this);
+            storageBuilder.db(this);
         }
-
-        storageBuilder = builder;
         return storageBuilder;
     }
 
@@ -2203,7 +2220,8 @@ public class Database implements DataHandler, DbObject {
     }
 
     private static String getCreateSQL(String quotedDbName, Map<String, String> parameters,
-            Map<String, String> replicationProperties, RunMode runMode) {
+            Map<String, String> replicationProperties, Map<String, String> endpointAssignmentProperties,
+            RunMode runMode) {
         StatementBuilder sql = new StatementBuilder("CREATE DATABASE IF NOT EXISTS ");
         sql.append(quotedDbName);
         if (runMode != null) {
@@ -2212,6 +2230,10 @@ public class Database implements DataHandler, DbObject {
         if (replicationProperties != null && !replicationProperties.isEmpty()) {
             sql.append(" WITH REPLICATION STRATEGY");
             appendMap(sql, replicationProperties);
+        }
+        if (endpointAssignmentProperties != null && !endpointAssignmentProperties.isEmpty()) {
+            sql.append(" WITH ENDPOINT ASSIGNMENT STRATEGY");
+            appendMap(sql, endpointAssignmentProperties);
         }
         if (parameters != null && !parameters.isEmpty()) {
             sql.append(" PARAMETERS");
@@ -2244,7 +2266,8 @@ public class Database implements DataHandler, DbObject {
 
     @Override
     public String getCreateSQL() {
-        return getCreateSQL(quoteIdentifier(name), parameters, replicationProperties, runMode);
+        return getCreateSQL(quoteIdentifier(name), parameters, replicationProperties, endpointAssignmentProperties,
+                runMode);
     }
 
     @Override
@@ -2291,6 +2314,7 @@ public class Database implements DataHandler, DbObject {
     private HashSet<NetEndpoint> endpoints;
     private String targetEndpoints;
 
+    @Override
     public String[] getHostIds() {
         if (hostIds == null) {
             synchronized (this) {
@@ -2489,5 +2513,51 @@ public class Database implements DataHandler, DbObject {
 
     void setLastConnectionInfo(ConnectionInfo ci) {
         lastConnectionInfo = ci;
+    }
+
+    @Override
+    public void notifyRunModeChanged() {
+        String hostIds = getParameters().get("hostIds");
+        for (ServerSession session : getSessions(false)) {
+            session.runModeChanged(hostIds);
+        }
+    }
+
+    @Override
+    public Session createInternalSession(boolean useSystemDatabase) {
+        return LealoneDatabase.getInstance().createInternalSession();
+    }
+
+    @Override
+    public ReplicationSession createReplicationSession(Session session, Collection<NetEndpoint> replicationEndpoints) {
+        return NetEndpointManagerHolder.get().createReplicationSession(session, replicationEndpoints);
+    }
+
+    @Override
+    public ReplicationSession createReplicationSession(Session session, Collection<NetEndpoint> replicationEndpoints,
+            Boolean remote) {
+        return NetEndpointManagerHolder.get().createReplicationSession(session, replicationEndpoints, remote);
+    }
+
+    @Override
+    public NetEndpoint getEndpoint(String hostId) {
+        return NetEndpointManagerHolder.get().getEndpoint(hostId);
+    }
+
+    @Override
+    public String getHostId(NetEndpoint endpoint) {
+        return NetEndpointManagerHolder.get().getHostId(endpoint);
+    }
+
+    @Override
+    public String getLocalHostId() {
+        return NetEndpoint.getLocalTcpHostAndPort();
+    }
+
+    @Override
+    public List<NetEndpoint> getReplicationEndpoints(Set<NetEndpoint> oldReplicationEndpoints,
+            Set<NetEndpoint> candidateEndpoints) {
+        return NetEndpointManagerHolder.get().getReplicationEndpoints(this, oldReplicationEndpoints,
+                candidateEndpoints);
     }
 }

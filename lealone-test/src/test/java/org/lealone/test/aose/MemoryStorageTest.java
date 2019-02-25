@@ -32,8 +32,11 @@ public class MemoryStorageTest {
         test.setStorageEngineName(MemoryStorageEngine.NAME);
         test.setEmbedded(true);
         test.printURL();
+        TestBase.initTransactionEngine();
 
         CRUDExample.crud(test.getConnection());
+
+        TestBase.closeTransactionEngine();
     }
 
 }

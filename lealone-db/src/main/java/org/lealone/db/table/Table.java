@@ -12,18 +12,16 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
-import org.lealone.common.util.New;
+import org.lealone.common.util.Utils;
 import org.lealone.db.Constants;
 import org.lealone.db.DbObject;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.Right;
 import org.lealone.db.constraint.Constraint;
-import org.lealone.db.expression.Expression;
-import org.lealone.db.expression.ExpressionVisitor;
 import org.lealone.db.index.Index;
 import org.lealone.db.index.IndexType;
 import org.lealone.db.result.Row;
@@ -31,7 +29,6 @@ import org.lealone.db.result.RowList;
 import org.lealone.db.result.SearchRow;
 import org.lealone.db.result.SimpleRow;
 import org.lealone.db.result.SimpleRowValue;
-import org.lealone.db.result.SortOrder;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.SchemaObjectBase;
 import org.lealone.db.schema.Sequence;
@@ -39,6 +36,7 @@ import org.lealone.db.schema.TriggerObject;
 import org.lealone.db.value.CompareMode;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
+import org.lealone.sql.IExpression;
 import org.lealone.sql.PreparedStatement;
 import org.lealone.storage.StorageMap;
 
@@ -224,6 +222,17 @@ public abstract class Table extends SchemaObjectBase {
     }
 
     /**
+     * Update a row from the table and all indexes.
+     *
+     * @param session the session
+     * @param oldRow the old row
+     * @param newRow the new row
+     */
+    public void updateRow(ServerSession session, Row oldRow, Row newRow, List<Column> updateColumns) {
+        throw newUnsupportedException();
+    }
+
+    /**
      * Remove a row from the table and all indexes.
      *
      * @param session the session
@@ -348,7 +357,7 @@ public abstract class Table extends SchemaObjectBase {
      *
      * @param dependencies the current set of dependencies
      */
-    public void addDependencies(HashSet<DbObject> dependencies) {
+    public void addDependencies(Set<DbObject> dependencies) {
         if (dependencies.contains(this)) {
             // avoid endless recursion
             return;
@@ -358,14 +367,13 @@ public abstract class Table extends SchemaObjectBase {
                 dependencies.add(s);
             }
         }
-        ExpressionVisitor visitor = ExpressionVisitor.getDependenciesVisitor(dependencies);
         if (columns != null)
             for (Column col : columns) {
-                col.isEverything(visitor);
+                col.getDependencies(dependencies);
             }
         if (constraints != null) {
             for (Constraint c : constraints) {
-                c.isEverything(visitor);
+                c.getDependencies(dependencies);
             }
         }
         dependencies.add(this);
@@ -373,7 +381,7 @@ public abstract class Table extends SchemaObjectBase {
 
     @Override
     public List<DbObject> getChildren() {
-        ArrayList<DbObject> children = New.arrayList();
+        ArrayList<DbObject> children = Utils.newSmallArrayList();
         ArrayList<Index> indexes = getIndexes();
         if (indexes != null) {
             children.addAll(indexes);
@@ -453,28 +461,19 @@ public abstract class Table extends SchemaObjectBase {
      * @param rows a list of row pairs of the form old row, new row, old row,
      *            new row,...
      */
-    public void updateRows(PreparedStatement prepared, ServerSession session, RowList rows) {
+    public void updateRows(PreparedStatement prepared, ServerSession session, RowList rows,
+            List<Column> updateColumns) {
         // in case we need to undo the update
         int savepointId = session.getTransaction().getSavepointId();
-        // remove the old rows
         int rowScanCount = 0;
         for (rows.reset(); rows.hasNext();) {
             if ((++rowScanCount & 127) == 0) {
                 prepared.checkCanceled();
             }
-            Row o = rows.next();
-            rows.next();
-            removeRow(session, o);
-        }
-        // add the new rows
-        for (rows.reset(); rows.hasNext();) {
-            if ((++rowScanCount & 127) == 0) {
-                prepared.checkCanceled();
-            }
-            rows.next();
-            Row n = rows.next();
+            Row oldRow = rows.next();
+            Row newRow = rows.next();
             try {
-                addRow(session, n);
+                updateRow(session, oldRow, newRow, updateColumns);
             } catch (DbException e) {
                 if (e.getErrorCode() == ErrorCode.CONCURRENT_UPDATE_1) {
                     session.rollbackTo(savepointId);
@@ -482,6 +481,35 @@ public abstract class Table extends SchemaObjectBase {
                 throw e;
             }
         }
+
+        // // in case we need to undo the update
+        // int savepointId = session.getTransaction().getSavepointId();
+        // // remove the old rows
+        // int rowScanCount = 0;
+        // for (rows.reset(); rows.hasNext();) {
+        // if ((++rowScanCount & 127) == 0) {
+        // prepared.checkCanceled();
+        // }
+        // Row o = rows.next();
+        // rows.next();
+        // removeRow(session, o);
+        // }
+        // // add the new rows
+        // for (rows.reset(); rows.hasNext();) {
+        // if ((++rowScanCount & 127) == 0) {
+        // prepared.checkCanceled();
+        // }
+        // rows.next();
+        // Row n = rows.next();
+        // try {
+        // addRow(session, n);
+        // } catch (DbException e) {
+        // if (e.getErrorCode() == ErrorCode.CONCURRENT_UPDATE_1) {
+        // session.rollbackTo(savepointId);
+        // }
+        // throw e;
+        // }
+        // }
     }
 
     public ArrayList<TableView> getViews() {
@@ -537,7 +565,7 @@ public abstract class Table extends SchemaObjectBase {
      *             constraints or indexes
      */
     public void dropSingleColumnConstraintsAndIndexes(ServerSession session, Column col) {
-        ArrayList<Constraint> constraintsToDrop = New.arrayList();
+        ArrayList<Constraint> constraintsToDrop = Utils.newSmallArrayList();
         if (constraints != null) {
             for (int i = 0, size = constraints.size(); i < size; i++) {
                 Constraint constraint = constraints.get(i);
@@ -552,7 +580,7 @@ public abstract class Table extends SchemaObjectBase {
                 }
             }
         }
-        ArrayList<Index> indexesToDrop = New.arrayList();
+        ArrayList<Index> indexesToDrop = Utils.newSmallArrayList();
         ArrayList<Index> indexes = getIndexes();
         if (indexes != null) {
             for (int i = 0, size = indexes.size(); i < size; i++) {
@@ -598,7 +626,7 @@ public abstract class Table extends SchemaObjectBase {
         return new SimpleRow(new Value[columns.length]);
     }
 
-    synchronized Row getNullRow() {
+    public synchronized Row getNullRow() {
         if (nullRow == null) {
             nullRow = new Row(new Value[columns.length], 1);
             for (int i = 0; i < columns.length; i++) {
@@ -650,32 +678,32 @@ public abstract class Table extends SchemaObjectBase {
         return columnMap.containsKey(columnName);
     }
 
-    /**
-     * Get the best plan for the given search mask.
-     *
-     * @param session the session
-     * @param masks per-column comparison bit masks, null means 'always false',
-     *              see constants in IndexCondition
-     * @param sortOrder the sort order
-     * @return the plan item
-     */
-    public PlanItem getBestPlanItem(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder) {
-        PlanItem item = new PlanItem();
-        item.setIndex(getScanIndex(session));
-        item.cost = item.getIndex().getCost(session, null, null, null);
-        ArrayList<Index> indexes = getIndexes();
-        if (indexes != null && masks != null) {
-            for (int i = 1, size = indexes.size(); i < size; i++) {
-                Index index = indexes.get(i);
-                double cost = index.getCost(session, masks, filter, sortOrder);
-                if (cost < item.cost) {
-                    item.cost = cost;
-                    item.setIndex(index);
-                }
-            }
-        }
-        return item;
-    }
+    // /**
+    // * Get the best plan for the given search mask.
+    // *
+    // * @param session the session
+    // * @param masks per-column comparison bit masks, null means 'always false',
+    // * see constants in IndexCondition
+    // * @param sortOrder the sort order
+    // * @return the plan item
+    // */
+    // public PlanItem getBestPlanItem(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder) {
+    // PlanItem item = new PlanItem();
+    // item.setIndex(getScanIndex(session));
+    // item.cost = item.getIndex().getCost(session, null, null, null);
+    // ArrayList<Index> indexes = getIndexes();
+    // if (indexes != null && masks != null) {
+    // for (int i = 1, size = indexes.size(); i < size; i++) {
+    // Index index = indexes.get(i);
+    // double cost = index.getCost(session, masks, filter, sortOrder);
+    // if (cost < item.cost) {
+    // item.cost = cost;
+    // item.setIndex(index);
+    // }
+    // }
+    // }
+    // return item;
+    // }
 
     /**
      * Get the primary key index if there is one, or null if there is none.
@@ -835,7 +863,7 @@ public abstract class Table extends SchemaObjectBase {
 
     private static <T> ArrayList<T> add(ArrayList<T> list, T obj) {
         if (list == null) {
-            list = New.arrayList();
+            list = new ArrayList<>(1);
         }
         // self constraints are two entries in the list
         list.add(obj);
@@ -880,7 +908,7 @@ public abstract class Table extends SchemaObjectBase {
      *  @return if there are any triggers or rows defined
      */
     public boolean fireRow() {
-        return (constraints != null && constraints.size() > 0) || (triggers != null && triggers.size() > 0);
+        return (constraints != null && !constraints.isEmpty()) || (triggers != null && !triggers.isEmpty());
     }
 
     /**
@@ -1101,7 +1129,7 @@ public abstract class Table extends SchemaObjectBase {
      * @return the value
      */
     public Value getDefaultValue(ServerSession session, Column column) {
-        Expression defaultExpr = column.getDefaultExpression();
+        IExpression defaultExpr = column.getDefaultExpression();
         Value v;
         if (defaultExpr == null) {
             v = column.validateConvertUpdateSequence(session, null);

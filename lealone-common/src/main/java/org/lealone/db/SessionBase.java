@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.lealone.common.exceptions.DbException;
+import org.lealone.sql.PreparedStatement;
 import org.lealone.storage.StorageMap;
 import org.lealone.transaction.Transaction;
 
@@ -36,6 +37,8 @@ public abstract class SessionBase implements Session {
 
     protected boolean autoCommit = true;
     protected Transaction parentTransaction;
+
+    protected String newTargetEndpoints;
 
     @Override
     public String getReplicationName() {
@@ -63,8 +66,8 @@ public abstract class SessionBase implements Session {
     }
 
     @Override
-    public void addRootPages(String dbName, ByteBuffer rootPages) {
-        throw DbException.getUnsupportedException("addRootPages");
+    public void replicateRootPages(String dbName, ByteBuffer rootPages) {
+        throw DbException.getUnsupportedException("replicateRootPages");
     }
 
     @Override
@@ -155,6 +158,11 @@ public abstract class SessionBase implements Session {
     }
 
     @Override
+    public Transaction getTransaction(PreparedStatement statement) {
+        throw DbException.getUnsupportedException("getTransaction");
+    }
+
+    @Override
     public Transaction getParentTransaction() {
         return parentTransaction;
     }
@@ -163,5 +171,22 @@ public abstract class SessionBase implements Session {
     @Override
     public synchronized void setParentTransaction(Transaction parentTransaction) {
         this.parentTransaction = parentTransaction;
+    }
+
+    @Override
+    public boolean isRunModeChanged() {
+        return newTargetEndpoints != null;
+    }
+
+    @Override
+    public String getNewTargetEndpoints() {
+        String endpoints = newTargetEndpoints;
+        newTargetEndpoints = null;
+        return endpoints;
+    }
+
+    @Override
+    public void runModeChanged(String newTargetEndpoints) {
+        this.newTargetEndpoints = newTargetEndpoints;
     }
 }

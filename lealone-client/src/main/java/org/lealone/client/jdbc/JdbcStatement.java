@@ -13,17 +13,17 @@ import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.util.ArrayList;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.async.AsyncHandler;
-import org.lealone.async.AsyncResult;
 import org.lealone.client.ClientBatchCommand;
 import org.lealone.client.ClientSession;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.TraceObject;
-import org.lealone.common.util.New;
+import org.lealone.common.util.Utils;
 import org.lealone.db.Command;
 import org.lealone.db.Session;
 import org.lealone.db.SysProperties;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.async.AsyncHandler;
+import org.lealone.db.async.AsyncResult;
 import org.lealone.db.result.Result;
 
 /**
@@ -48,7 +48,8 @@ public class JdbcStatement extends TraceObject implements Statement {
     private ArrayList<String> batchCommands;
     private boolean escapeProcessing = true;
 
-    JdbcStatement(JdbcConnection conn, int id, int resultSetType, int resultSetConcurrency, boolean closeWithResultSet) {
+    JdbcStatement(JdbcConnection conn, int id, int resultSetType, int resultSetConcurrency,
+            boolean closeWithResultSet) {
         this.conn = conn;
         this.session = conn.getSession();
         setTrace(session.getTrace(), TraceObject.STATEMENT, id);
@@ -79,8 +80,8 @@ public class JdbcStatement extends TraceObject implements Statement {
         try {
             int id = getNextTraceId(TraceObject.RESULT_SET);
             if (isDebugEnabled()) {
-                debugCodeAssign("ResultSet", TraceObject.RESULT_SET, id, "executeQuery" + (async ? "Async" : "") + "("
-                        + quote(sql) + ")");
+                debugCodeAssign("ResultSet", TraceObject.RESULT_SET, id,
+                        "executeQuery" + (async ? "Async" : "") + "(" + quote(sql) + ")");
             }
             checkClosed();
             closeOldResultSet();
@@ -93,6 +94,7 @@ public class JdbcStatement extends TraceObject implements Statement {
                 AsyncHandler<AsyncResult<Result>> h = new AsyncHandler<AsyncResult<Result>>() {
                     @Override
                     public void handle(AsyncResult<Result> ar) {
+                        JdbcResultSet resultSet = null;
                         if (ar.isSucceeded()) {
                             Result r = ar.getResult();
                             resultSet = new JdbcResultSet(conn, JdbcStatement.this, r, id, closedByResultSet,
@@ -224,24 +226,25 @@ public class JdbcStatement extends TraceObject implements Statement {
     private boolean executeInternal(String sql) throws SQLException {
         if (sql != null) {
             sql = sql.trim();
-            if (!sql.isEmpty()) {
-                char c = Character.toUpperCase(sql.charAt(0));
-                switch (c) {
-                case 'S': // select or show
-                    executeQuery(sql);
-                    return true;
-                case 'I': // insert
-                case 'U': // update
-                case 'D': // delete or drop
-                case 'C': // create
-                case 'A': // alter
-                case 'M': // merge
-                    executeUpdate(sql);
-                    return false;
-                default:
-                    break;
-                }
-            }
+            // 禁用这段代码，容易遗漏，比如set命令得用executeUpdate
+            // if (!sql.isEmpty()) {
+            // char c = Character.toUpperCase(sql.charAt(0));
+            // switch (c) {
+            // case 'S': // select or show
+            // executeQuery(sql);
+            // return true;
+            // case 'I': // insert
+            // case 'U': // update
+            // case 'D': // delete or drop
+            // case 'C': // create
+            // case 'A': // alter
+            // case 'M': // merge
+            // executeUpdate(sql);
+            // return false;
+            // default:
+            // break;
+            // }
+            // }
         }
         int id = getNextTraceId(TraceObject.RESULT_SET);
         checkClosed();
@@ -692,7 +695,7 @@ public class JdbcStatement extends TraceObject implements Statement {
             checkClosed();
             sql = JdbcConnection.translateSQL(sql, escapeProcessing);
             if (batchCommands == null) {
-                batchCommands = New.arrayList();
+                batchCommands = Utils.newSmallArrayList();
             }
             batchCommands.add(sql);
         } catch (Exception e) {

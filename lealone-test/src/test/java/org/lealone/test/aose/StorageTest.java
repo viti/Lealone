@@ -24,7 +24,7 @@ public class StorageTest extends SqlTestBase {
     @Test
     public void run() {
         executeUpdate("CREATE TABLE IF NOT EXISTS StorageTest(f1 int, f2 int) ENGINE " + DEFAULT_STORAGE_ENGINE_NAME
-                + " WITH(map_type=BufferedMap)");
+                + " PARAMETERS(mapType='BufferedMap')");
         executeUpdate("INSERT INTO StorageTest(f1, f2) VALUES(1, 10)");
         executeUpdate("INSERT INTO StorageTest(f1, f2) VALUES(2, 20)");
 

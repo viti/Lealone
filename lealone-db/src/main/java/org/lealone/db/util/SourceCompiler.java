@@ -19,13 +19,12 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.HashMap;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.IOUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Task;
 import org.lealone.common.util.Utils;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.storage.fs.FileUtils;
 
 /**
@@ -39,12 +38,12 @@ public class SourceCompiler {
     /**
      * The class name to source code map.
      */
-    final HashMap<String, String> sources = New.hashMap();
+    final HashMap<String, String> sources = new HashMap<>();
 
     /**
      * The class name to byte code map.
      */
-    final HashMap<String, Class<?>> compiled = New.hashMap();
+    final HashMap<String, Class<?>> compiled = new HashMap<>();
 
     private final String compileDir = Utils.getProperty("java.io.tmpdir", ".");
 
@@ -84,6 +83,7 @@ public class SourceCompiler {
         }
 
         ClassLoader classLoader = new ClassLoader(getClass().getClassLoader()) {
+            @Override
             public Class<?> findClass(String name) throws ClassNotFoundException {
                 Class<?> classInstance = compiled.get(name);
                 if (classInstance == null) {
@@ -208,6 +208,7 @@ public class SourceCompiler {
 
     private static void copyInThread(final InputStream in, final OutputStream out) {
         new Task() {
+            @Override
             public void call() throws IOException {
                 IOUtils.copy(in, out);
             }

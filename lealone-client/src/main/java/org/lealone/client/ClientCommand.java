@@ -9,30 +9,31 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.async.AsyncHandler;
-import org.lealone.async.AsyncResult;
 import org.lealone.client.result.ClientResult;
 import org.lealone.client.result.RowCountDeterminedClientResult;
 import org.lealone.client.result.RowCountUndeterminedClientResult;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
-import org.lealone.common.util.New;
+import org.lealone.common.util.Utils;
 import org.lealone.db.Command;
-import org.lealone.db.CommandBase;
 import org.lealone.db.CommandParameter;
 import org.lealone.db.CommandUpdateResult;
 import org.lealone.db.Session;
 import org.lealone.db.SysProperties;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.async.AsyncHandler;
+import org.lealone.db.async.AsyncResult;
 import org.lealone.db.result.Result;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueLong;
 import org.lealone.net.AsyncCallback;
 import org.lealone.net.Transfer;
 import org.lealone.storage.LeafPageMovePlan;
+import org.lealone.storage.PageKey;
 import org.lealone.storage.StorageCommand;
 
 /**
@@ -42,7 +43,7 @@ import org.lealone.storage.StorageCommand;
  * @author H2 Group
  * @author zhh
  */
-public class ClientCommand extends CommandBase implements StorageCommand {
+public class ClientCommand implements StorageCommand {
 
     private final Transfer transfer;
     private final ArrayList<CommandParameter> parameters;
@@ -56,11 +57,16 @@ public class ClientCommand extends CommandBase implements StorageCommand {
 
     public ClientCommand(ClientSession session, Transfer transfer, String sql, int fetchSize) {
         this.transfer = transfer;
-        parameters = New.arrayList();
+        parameters = Utils.newSmallArrayList();
         trace = session.getTrace();
         this.sql = sql;
         this.fetchSize = fetchSize;
         this.session = session;
+    }
+
+    @Override
+    public int getType() {
+        return CLIENT_COMMAND;
     }
 
     @Override
@@ -164,21 +170,32 @@ public class ClientCommand extends CommandBase implements StorageCommand {
 
     @Override
     public Result executeQuery(int maxRows) {
-        return executeQuery(maxRows, false, null, false);
+        return query(maxRows, false, null, null);
     }
 
     @Override
     public Result executeQuery(int maxRows, boolean scrollable) {
-        return executeQuery(maxRows, scrollable, null, false);
+        return query(maxRows, scrollable, null, null);
+    }
+
+    @Override
+    public Result executeQuery(int maxRows, boolean scrollable, List<PageKey> pageKeys) {
+        return query(maxRows, scrollable, pageKeys, null);
     }
 
     @Override
     public void executeQueryAsync(int maxRows, boolean scrollable, AsyncHandler<AsyncResult<Result>> handler) {
-        executeQuery(maxRows, scrollable, handler, true);
+        query(maxRows, scrollable, null, handler);
     }
 
-    private Result executeQuery(int maxRows, boolean scrollable, AsyncHandler<AsyncResult<Result>> handler,
-            boolean async) {
+    @Override
+    public void executeQueryAsync(int maxRows, boolean scrollable, List<PageKey> pageKeys,
+            AsyncHandler<AsyncResult<Result>> handler) {
+        query(maxRows, scrollable, pageKeys, handler);
+    }
+
+    private Result query(int maxRows, boolean scrollable, List<PageKey> pageKeys,
+            AsyncHandler<AsyncResult<Result>> handler) {
         if (prepared) {
             checkParameters();
             prepareIfRequired();
@@ -199,7 +216,6 @@ public class ClientCommand extends CommandBase implements StorageCommand {
                     session.traceOperation("COMMAND_PREPARED_QUERY", id);
                     transfer.writeRequestHeader(id, Session.COMMAND_PREPARED_QUERY);
                 }
-                transfer.writeInt(resultId).writeInt(maxRows);
             } else {
                 if (isDistributedQuery) {
                     session.traceOperation("COMMAND_DISTRIBUTED_TRANSACTION_QUERY", id);
@@ -208,7 +224,6 @@ public class ClientCommand extends CommandBase implements StorageCommand {
                     session.traceOperation("COMMAND_QUERY", id);
                     transfer.writeRequestHeader(id, Session.COMMAND_QUERY);
                 }
-                transfer.writeString(sql).writeInt(resultId).writeInt(maxRows);
             }
             int fetch;
             if (scrollable) {
@@ -216,18 +231,35 @@ public class ClientCommand extends CommandBase implements StorageCommand {
             } else {
                 fetch = fetchSize;
             }
-            transfer.writeInt(fetch);
+            transfer.writeInt(resultId).writeInt(maxRows).writeInt(fetch).writeBoolean(scrollable);
             if (prepared)
                 sendParameters(transfer);
-            result = getQueryResult(isDistributedQuery, fetch, resultId, handler, async);
+            else
+                transfer.writeString(sql);
+            writePageKeys(pageKeys);
+
+            result = getQueryResult(isDistributedQuery, fetch, resultId, handler);
         } catch (Exception e) {
             session.handleException(e);
         }
         return result;
     }
 
+    private void writePageKeys(List<PageKey> pageKeys) throws IOException {
+        if (pageKeys == null) {
+            transfer.writeInt(0);
+        } else {
+            int size = pageKeys.size();
+            transfer.writeInt(size);
+            for (int i = 0; i < size; i++) {
+                PageKey pk = pageKeys.get(i);
+                transfer.writePageKey(pk);
+            }
+        }
+    }
+
     private Result getQueryResult(boolean isDistributedQuery, int fetch, int resultId,
-            AsyncHandler<AsyncResult<Result>> handler, boolean async) throws IOException {
+            AsyncHandler<AsyncResult<Result>> handler) throws IOException {
         isQuery = true;
         AsyncCallback<ClientResult> ac = new AsyncCallback<ClientResult>() {
             @Override
@@ -255,12 +287,12 @@ public class ClientCommand extends CommandBase implements StorageCommand {
                 }
             }
         };
-        if (async)
+        if (handler != null)
             ac.setAsyncHandler(handler);
         transfer.addAsyncCallback(id, ac);
         transfer.flush();
 
-        if (async) {
+        if (handler != null) {
             return null;
         } else {
             Result result = ac.getResult();
@@ -270,21 +302,26 @@ public class ClientCommand extends CommandBase implements StorageCommand {
 
     @Override
     public int executeUpdate() {
-        return executeUpdate(null, null, false, null);
+        return update(null, null, null, null);
+    }
+
+    @Override
+    public int executeUpdate(List<PageKey> pageKeys) {
+        return update(null, null, pageKeys, null);
     }
 
     @Override
     public int executeUpdate(String replicationName, CommandUpdateResult commandUpdateResult) {
-        return executeUpdate(replicationName, null, false, commandUpdateResult);
+        return update(replicationName, commandUpdateResult, null, null);
     }
 
     @Override
     public void executeUpdateAsync(AsyncHandler<AsyncResult<Integer>> handler) {
-        executeUpdate(null, handler, true, null);
+        update(null, null, null, handler);
     }
 
-    private int executeUpdate(String replicationName, AsyncHandler<AsyncResult<Integer>> handler, boolean async,
-            CommandUpdateResult commandUpdateResult) {
+    private int update(String replicationName, CommandUpdateResult commandUpdateResult, List<PageKey> pageKeys,
+            AsyncHandler<AsyncResult<Integer>> handler) {
         if (prepared) {
             checkParameters();
             prepareIfRequired();
@@ -319,23 +356,26 @@ public class ClientCommand extends CommandBase implements StorageCommand {
                     transfer.writeRequestHeader(id, Session.COMMAND_UPDATE);
                 }
             }
-            if (!prepared)
-                transfer.writeString(sql);
+
             if (replicationName != null)
                 transfer.writeString(replicationName);
 
             if (prepared)
                 sendParameters(transfer);
+            else
+                transfer.writeString(sql);
 
-            updateCount = getUpdateCount(isDistributedUpdate, id, handler, async, commandUpdateResult);
+            writePageKeys(pageKeys);
+
+            updateCount = getUpdateCount(isDistributedUpdate, id, commandUpdateResult, handler);
         } catch (Exception e) {
             session.handleException(e);
         }
         return updateCount;
     }
 
-    private int getUpdateCount(boolean isDistributedUpdate, int id, AsyncHandler<AsyncResult<Integer>> handler,
-            boolean async, CommandUpdateResult commandUpdateResult) throws IOException {
+    private int getUpdateCount(boolean isDistributedUpdate, int id, CommandUpdateResult commandUpdateResult,
+            AsyncHandler<AsyncResult<Integer>> handler) throws IOException {
         isQuery = false;
         AsyncCallback<Integer> ac = new AsyncCallback<Integer>() {
             @Override
@@ -361,13 +401,13 @@ public class ClientCommand extends CommandBase implements StorageCommand {
                 }
             }
         };
-        if (async)
+        if (handler != null)
             ac.setAsyncHandler(handler);
         transfer.addAsyncCallback(id, ac);
         transfer.flush();
 
         int updateCount;
-        if (async) {
+        if (handler != null) {
             updateCount = -1;
         } else {
             updateCount = ac.getResult();
@@ -426,11 +466,6 @@ public class ClientCommand extends CommandBase implements StorageCommand {
     @Override
     public String toString() {
         return sql + Trace.formatParams(getParameters());
-    }
-
-    @Override
-    public int getType() {
-        return CLIENT_COMMAND;
     }
 
     int getId() {
@@ -523,12 +558,12 @@ public class ClientCommand extends CommandBase implements StorageCommand {
     }
 
     @Override
-    public void moveLeafPage(String mapName, ByteBuffer splitKey, ByteBuffer page) {
+    public void moveLeafPage(String mapName, PageKey pageKey, ByteBuffer page, boolean addPage) {
         int id = session.getNextId();
         try {
             session.traceOperation("COMMAND_STORAGE_MOVE_LEAF_PAGE", id);
             transfer.writeRequestHeader(id, Session.COMMAND_STORAGE_MOVE_LEAF_PAGE);
-            transfer.writeString(mapName).writeByteBuffer(splitKey).writeByteBuffer(page);
+            transfer.writeString(mapName).writePageKey(pageKey).writeByteBuffer(page).writeBoolean(addPage);
             transfer.flush();
         } catch (Exception e) {
             session.handleException(e);
@@ -536,12 +571,12 @@ public class ClientCommand extends CommandBase implements StorageCommand {
     }
 
     @Override
-    public void movePage(String dbName, String mapName, ByteBuffer page) {
+    public void replicateRootPages(String dbName, ByteBuffer rootPages) {
         int id = session.getNextId();
         try {
-            session.traceOperation("COMMAND_STORAGE_MOVE_PAGE", id);
-            transfer.writeRequestHeader(id, Session.COMMAND_STORAGE_MOVE_PAGE);
-            transfer.writeString(dbName).writeString(mapName).writeByteBuffer(page);
+            session.traceOperation("COMMAND_STORAGE_REPLICATE_ROOT_PAGES", id);
+            transfer.writeRequestHeader(id, Session.COMMAND_STORAGE_REPLICATE_ROOT_PAGES);
+            transfer.writeString(dbName).writeByteBuffer(rootPages);
             transfer.flush();
         } catch (Exception e) {
             session.handleException(e);
@@ -549,12 +584,12 @@ public class ClientCommand extends CommandBase implements StorageCommand {
     }
 
     @Override
-    public void removeLeafPage(String mapName, ByteBuffer key) {
+    public void removeLeafPage(String mapName, PageKey pageKey) {
         int id = session.getNextId();
         try {
             session.traceOperation("COMMAND_STORAGE_REMOVE_LEAF_PAGE", id);
             transfer.writeRequestHeader(id, Session.COMMAND_STORAGE_REMOVE_LEAF_PAGE);
-            transfer.writeString(mapName).writeByteBuffer(key);
+            transfer.writeString(mapName).writePageKey(pageKey);
             transfer.flush();
         } catch (Exception e) {
             session.handleException(e);
@@ -736,13 +771,12 @@ public class ClientCommand extends CommandBase implements StorageCommand {
     }
 
     @Override
-    public ByteBuffer readRemotePage(String mapName, ByteBuffer key, boolean last) {
+    public ByteBuffer readRemotePage(String mapName, PageKey pageKey) {
         int id = session.getNextId();
         try {
             session.traceOperation("COMMAND_STORAGE_READ_PAGE", id);
             transfer.writeRequestHeader(id, Session.COMMAND_STORAGE_READ_PAGE);
-            transfer.writeString(mapName).writeByteBuffer(key.slice()).writeBoolean(last);
-
+            transfer.writeString(mapName).writePageKey(pageKey);
             AsyncCallback<ByteBuffer> ac = new AsyncCallback<ByteBuffer>() {
                 @Override
                 public void runInternal() {

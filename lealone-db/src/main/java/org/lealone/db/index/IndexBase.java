@@ -6,7 +6,9 @@
  */
 package org.lealone.db.index;
 
-import org.lealone.api.ErrorCode;
+import java.util.List;
+import java.util.Map;
+
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
 import org.lealone.common.util.StatementBuilder;
@@ -15,6 +17,7 @@ import org.lealone.db.Constants;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.Mode;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.SearchRow;
 import org.lealone.db.result.SortOrder;
@@ -22,9 +25,10 @@ import org.lealone.db.schema.SchemaObjectBase;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
+import org.lealone.storage.IterationParameters;
+import org.lealone.storage.PageKey;
 import org.lealone.storage.StorageMap;
 
 /**
@@ -141,9 +145,19 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
         throw DbException.throwInternalError();
     }
 
+    // @Override
+    // public Cursor find(TableFilter filter, SearchRow first, SearchRow last) {
+    // return find(filter.getSession(), first, last);
+    // }
+    //
+    // @Override
+    // public Cursor find(TableFilter filter, SearchRow first, SearchRow last, List<PageKey> pageKeys) {
+    // return find(filter.getSession(), first, last, pageKeys);
+    // }
+
     @Override
-    public Cursor find(TableFilter filter, SearchRow first, SearchRow last) {
-        return find(filter.getSession(), first, last);
+    public Cursor find(ServerSession session, IterationParameters<SearchRow> parameters) {
+        return find(session, parameters.from, parameters.to);
     }
 
     /**
@@ -157,7 +171,7 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
      * @param sortOrder the sort order
      * @return the estimated cost
      */
-    protected long getCostRangeIndex(int[] masks, long rowCount, TableFilter filter, SortOrder sortOrder) {
+    protected long getCostRangeIndex(int[] masks, long rowCount, SortOrder sortOrder) {
         rowCount += Constants.COST_ROW_OFFSET;
         long cost = rowCount;
         long rows = rowCount;
@@ -173,7 +187,7 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
             // EQUALITY < RANGE < END < START
             // 如果索引字段列表的第一个字段在Where中是RANGE、START、END，那么索引字段列表中的其他字段就不需要再计算cost了，
             // 如果是EQUALITY，则还可以继续计算cost，rows变量的值会变小，cost也会变小
-            if ((mask & IndexCondition.EQUALITY) == IndexCondition.EQUALITY) {
+            if ((mask & IndexConditionType.EQUALITY) == IndexConditionType.EQUALITY) {
                 // 索引字段列表中的最后一个在where当中是EQUALITY，且此索引是唯一索引时，cost直接是3
                 // 因为如果最后一个索引字段是EQUALITY，说明前面的字段全是EQUALITY，
                 // 如果是唯一索引则rowCount / distinctRows是1，所以rows = Math.max(rowCount / distinctRows, 1)=1
@@ -189,13 +203,13 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
                 }
                 rows = Math.max(rowCount / distinctRows, 1); // distinctRows变大，则rowCount / distinctRows变小，rows也变小
                 cost = 2 + rows; // rows也变小，所以cost也变小
-            } else if ((mask & IndexCondition.RANGE) == IndexCondition.RANGE) { // 见TableFilter.getBestPlanItem中的注释
+            } else if ((mask & IndexConditionType.RANGE) == IndexConditionType.RANGE) { // 见TableFilter.getBestPlanItem中的注释
                 cost = 2 + rows / 4;
                 break;
-            } else if ((mask & IndexCondition.START) == IndexCondition.START) {
+            } else if ((mask & IndexConditionType.START) == IndexConditionType.START) {
                 cost = 2 + rows / 3;
                 break;
-            } else if ((mask & IndexCondition.END) == IndexCondition.END) { // "<="的代价要小于">="
+            } else if ((mask & IndexConditionType.END) == IndexConditionType.END) { // "<="的代价要小于">="
                 cost = rows / 3;
                 break;
             } else {
@@ -216,7 +230,7 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
                     // more of the order by columns
                     break;
                 }
-                Column col = sortOrder.getColumn(i, filter);
+                Column col = sortOrder.getColumn(i, table);
                 if (col == null) {
                     sortOrderMatches = false;
                     break;
@@ -451,7 +465,17 @@ public abstract class IndexBase extends SchemaObjectBase implements Index {
     }
 
     @Override
+    public long getMemorySpaceUsed() {
+        return 0;
+    }
+
+    @Override
     public StorageMap<? extends Object, ? extends Object> getStorageMap() {
+        return null;
+    }
+
+    @Override
+    public Map<String, List<PageKey>> getEndpointToPageKeyMap(ServerSession session, SearchRow first, SearchRow last) {
         return null;
     }
 }

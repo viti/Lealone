@@ -8,12 +8,11 @@ package org.lealone.sql.dml;
 
 import java.util.ArrayList;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.api.Trigger;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.api.Trigger;
 import org.lealone.db.auth.Right;
 import org.lealone.db.index.Index;
 import org.lealone.db.result.Result;
@@ -32,12 +31,12 @@ import org.lealone.sql.expression.Parameter;
  * This class represents the statement
  * MERGE
  */
-public class Merge extends ManipulateStatement {
+public class Merge extends ManipulationStatement {
 
     private Table table;
     private Column[] columns;
     private Column[] keys;
-    private final ArrayList<Expression[]> list = New.arrayList();
+    private final ArrayList<Expression[]> list = new ArrayList<>();
     private Query query;
     private StatementBase update;
 
@@ -53,13 +52,6 @@ public class Merge extends ManipulateStatement {
     @Override
     public boolean isCacheable() {
         return true;
-    }
-
-    @Override
-    public boolean isBatch() {
-        // 因为GlobalUniqueIndex是通过独立的唯一索引表实现的，如果包含GlobalUniqueIndex，
-        // 那么每次往主表中增加一条记录时，都会同时往唯一索引表中加一条记录，所以也是批量的
-        return (query != null && query.isBatchForInsert()) || list.size() > 1 || table.containsGlobalUniqueIndex();
     }
 
     @Override

@@ -15,10 +15,11 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.Locale;
+import java.util.Map;
 import java.util.TimeZone;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueDate;
 import org.lealone.db.value.ValueNull;
@@ -858,4 +859,13 @@ public class DateTimeUtils {
         return dateValue(y, m + 3, (int) d);
     }
 
+    public static long getLoopInterval(Map<String, String> config, String key, long defaultValue) {
+        if (config == null)
+            return defaultValue;
+        String v = config.get(key);
+        if (v != null)
+            return Long.parseLong(v);
+        else
+            return defaultValue;
+    }
 }

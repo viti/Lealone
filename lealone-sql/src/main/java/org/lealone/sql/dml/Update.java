@@ -8,22 +8,20 @@ package org.lealone.sql.dml;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
+import java.util.HashSet;
 
-import org.lealone.api.ErrorCode;
-import org.lealone.api.Trigger;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
+import org.lealone.common.util.Utils;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.api.Trigger;
 import org.lealone.db.auth.Right;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.RowList;
 import org.lealone.db.table.Column;
-import org.lealone.db.table.PlanItem;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.PreparedStatement;
@@ -31,12 +29,14 @@ import org.lealone.sql.SQLStatement;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.Parameter;
 import org.lealone.sql.expression.ValueExpression;
+import org.lealone.sql.optimizer.PlanItem;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents the statement
  * UPDATE
  */
-public class Update extends ManipulateStatement {
+public class Update extends ManipulationStatement {
 
     private Expression condition;
     private TableFilter tableFilter;
@@ -44,9 +44,8 @@ public class Update extends ManipulateStatement {
     /** The limit expression as specified in the LIMIT clause. */
     private Expression limitExpr;
 
-    private final ArrayList<Column> columns = New.arrayList();
-    private final HashMap<Column, Expression> expressionMap = New.hashMap();
-    private final List<Row> rows = New.arrayList();
+    private final ArrayList<Column> columns = Utils.newSmallArrayList();
+    private final HashMap<Column, Expression> expressionMap = new HashMap<>();
 
     public Update(ServerSession session) {
         super(session);
@@ -66,15 +65,11 @@ public class Update extends ManipulateStatement {
         this.limitExpr = limit;
     }
 
-    @Override
-    public boolean isBatch() {
-        return !containsEqualPartitionKeyComparisonType(tableFilter);
-    }
-
     public void setTableFilter(TableFilter tableFilter) {
         this.tableFilter = tableFilter;
     }
 
+    @Override
     public TableFilter getTableFilter() {
         return tableFilter;
     }
@@ -103,21 +98,28 @@ public class Update extends ManipulateStatement {
 
     @Override
     public PreparedStatement prepare() {
+        int size = columns.size();
+        HashSet<Column> columnSet = new HashSet<>(size + 1);
         if (condition != null) {
             condition.mapColumns(tableFilter, 0);
             condition = condition.optimize(session);
             condition.createIndexConditions(session, tableFilter);
+            condition.getColumns(columnSet);
         }
-        for (int i = 0, size = columns.size(); i < size; i++) {
+        for (int i = 0; i < size; i++) {
             Column c = columns.get(i);
             Expression e = expressionMap.get(c);
             e.mapColumns(tableFilter, 0);
             expressionMap.put(c, e.optimize(session));
+
+            columnSet.add(c);
+            e.getColumns(columnSet); // 例如f1=f2*2;
         }
         PlanItem item = tableFilter.getBestPlanItem(session, 1);
         tableFilter.setPlanItem(item);
         tableFilter.prepare();
         cost = item.getCost();
+        tableFilter.createColumnIndexes(columnSet);
         return this;
     }
 
@@ -175,7 +177,6 @@ public class Update extends ManipulateStatement {
                     if (!done) {
                         rows.add(oldRow);
                         rows.add(newRow);
-                        this.rows.add(newRow);
                     }
                     count++;
                 }
@@ -188,7 +189,7 @@ public class Update extends ManipulateStatement {
             // we need to update all indexes) before row triggers
 
             // the cached row is already updated - we need the old values
-            table.updateRows(this, session, rows);
+            table.updateRows(this, session, rows, this.columns);
             if (table.fireRow()) {
                 rows.invalidateCache();
                 for (rows.reset(); rows.hasNext();) {

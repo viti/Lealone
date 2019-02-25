@@ -8,10 +8,9 @@ package org.lealone.db.table;
 
 import java.util.ArrayList;
 
-import org.lealone.common.util.New;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.db.ServerSession;
 import org.lealone.db.schema.Schema;
-import org.lealone.db.value.CaseInsensitiveMap;
 
 /**
  * The data required to create a table.
@@ -36,7 +35,7 @@ public class CreateTableData {
     /**
      * The column list.
      */
-    public ArrayList<Column> columns = New.arrayList();
+    public ArrayList<Column> columns = new ArrayList<>();
 
     /**
      * Whether this is a temporary table.

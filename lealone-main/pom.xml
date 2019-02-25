@@ -52,12 +52,12 @@
         </dependency>
         <dependency>
             <groupId>org.lealone</groupId>
-            <artifactId>lealone-orm</artifactId>
+            <artifactId>lealone-sql</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.lealone</groupId>
-            <artifactId>lealone-vertx</artifactId>
+            <artifactId>lealone-p2p</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

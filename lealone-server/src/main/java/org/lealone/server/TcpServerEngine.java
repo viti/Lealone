@@ -21,10 +21,11 @@ import java.util.Map;
 
 public class TcpServerEngine extends ProtocolServerEngineBase {
 
+    public static final String NAME = "TCP";
     private final TcpServer tcpServer = new TcpServer();
 
     public TcpServerEngine() {
-        super("TCP");
+        super(NAME);
     }
 
     @Override

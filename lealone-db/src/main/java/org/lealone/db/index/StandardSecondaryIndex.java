@@ -11,17 +11,15 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.TreeSet;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.SearchRow;
 import org.lealone.db.result.SortOrder;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.StandardTable;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.CompareMode;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
@@ -73,18 +71,8 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
         Storage storage = database.getStorage(table.getStorageEngine());
         TransactionEngine transactionEngine = database.getTransactionEngine();
 
-        String initReplicationEndpoints = null;
-        String replicationName = session.getReplicationName();
-        if (replicationName != null) {
-            int pos = replicationName.indexOf('@');
-            if (pos != -1) {
-                initReplicationEndpoints = replicationName.substring(0, pos);
-            }
-        }
-
         Transaction t = transactionEngine.beginTransaction(false, session.isShardingMode());
-        TransactionMap<Value, Value> map = t.openMap(mapName, table.getMapType(), keyType, valueType, storage,
-                session.getDatabase().isShardingMode(), initReplicationEndpoints);
+        TransactionMap<Value, Value> map = t.openMap(mapName, keyType, valueType, storage, table.getParameters());
         transactionEngine.addTransactionMap(map);
         t.commit(); // 避免产生内部未提交的事务
         if (!keyType.equals(map.getKeyType())) {
@@ -113,7 +101,7 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
 
     @Override
     public void addBufferedRows(ServerSession session, List<String> bufferNames) {
-        ArrayList<String> mapNames = New.arrayList(bufferNames);
+        ArrayList<String> mapNames = new ArrayList<>(bufferNames);
         final CompareMode compareMode = database.getCompareMode();
         /**
          * A source of values.
@@ -244,6 +232,17 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
     }
 
     @Override
+    public void update(ServerSession session, Row oldRow, Row newRow, List<Column> updateColumns) {
+        // 只有索引字段被更新时才更新索引
+        for (Column c : columns) {
+            if (updateColumns.contains(c)) {
+                super.update(session, oldRow, newRow, updateColumns);
+                break;
+            }
+        }
+    }
+
+    @Override
     public void remove(ServerSession session, Row row) {
         ValueArray array = convertToKey(row);
         TransactionMap<Value, Value> map = getMap(session);
@@ -291,10 +290,11 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
      */
     SearchRow convertToSearchRow(ValueArray key) {
         Value[] array = key.getList();
+        int len = array.length - 1;
         SearchRow searchRow = table.getTemplateRow();
-        searchRow.setKey((array[array.length - 1]).getLong());
+        searchRow.setKey((array[len]).getLong());
         Column[] cols = getColumns();
-        for (int i = 0; i < array.length - 1; i++) {
+        for (int i = 0; i < len; i++) {
             Column c = cols[i];
             int idx = c.getColumnId();
             Value v = array[i];
@@ -304,9 +304,9 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
     }
 
     @Override
-    public double getCost(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder) {
+    public double getCost(ServerSession session, int[] masks, SortOrder sortOrder) {
         try {
-            return 10 * getCostRangeIndex(masks, dataMap.rawSize(), filter, sortOrder);
+            return 10 * getCostRangeIndex(masks, dataMap.rawSize(), sortOrder);
         } catch (IllegalStateException e) {
             throw DbException.get(ErrorCode.OBJECT_CLOSED, e);
         }
@@ -343,7 +343,7 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
             }
             key = first ? map.higherKey(key) : map.lowerKey(key);
         }
-        ArrayList<Value> list = New.arrayList();
+        ArrayList<Value> list = new ArrayList<>(1);
         list.add(key);
         StandardSecondaryIndexCursor cursor = new StandardSecondaryIndexCursor(session, list.iterator(), null);
         cursor.next();
@@ -375,8 +375,12 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
 
     @Override
     public long getDiskSpaceUsed() {
-        // TODO estimate disk space usage
-        return 0;
+        return dataMap.getDiskSpaceUsed();
+    }
+
+    @Override
+    public long getMemorySpaceUsed() {
+        return dataMap.getMemorySpaceUsed();
     }
 
     @Override
@@ -436,10 +440,15 @@ public class StandardSecondaryIndex extends IndexBase implements StandardIndex {
 
         @Override
         public Row get() {
+            return get(null);
+        }
+
+        @Override
+        public Row get(int[] columnIndexes) {
             if (row == null) {
                 SearchRow r = getSearchRow();
                 if (r != null) {
-                    row = table.getRow(session, r.getKey());
+                    row = table.getRow(session, r.getKey(), columnIndexes);
                 }
             }
             return row;

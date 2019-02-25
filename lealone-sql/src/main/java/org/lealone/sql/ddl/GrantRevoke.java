@@ -7,12 +7,11 @@ package org.lealone.sql.ddl;
 
 import java.util.ArrayList;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.db.Database;
 import org.lealone.db.DbObject;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.Right;
 import org.lealone.db.auth.RightOwner;
 import org.lealone.db.auth.Role;
@@ -30,12 +29,12 @@ import org.lealone.sql.SQLStatement;
  * @author H2 Group
  * @author zhh
  */
-public class GrantRevoke extends DefineStatement implements AuthStatement {
+public class GrantRevoke extends DefinitionStatement implements AuthStatement {
 
     private ArrayList<String> roleNames;
     private int operationType;
     private int rightMask;
-    private final ArrayList<Table> tables = New.arrayList();
+    private final ArrayList<Table> tables = new ArrayList<>();
     private Schema schema;
     private RightOwner grantee;
 
@@ -68,7 +67,7 @@ public class GrantRevoke extends DefineStatement implements AuthStatement {
      */
     public void addRoleName(String roleName) {
         if (roleNames == null) {
-            roleNames = New.arrayList();
+            roleNames = new ArrayList<>();
         }
         roleNames.add(roleName);
     }

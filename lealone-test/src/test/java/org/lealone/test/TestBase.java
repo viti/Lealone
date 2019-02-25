@@ -24,20 +24,24 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.Assert;
-import org.lealone.aose.config.Config;
+import org.lealone.common.logging.ConsoleLogDelegateFactory;
+import org.lealone.common.logging.LoggerFactory;
 import org.lealone.common.trace.TraceSystem;
 import org.lealone.db.Constants;
 import org.lealone.db.SysProperties;
-import org.lealone.mvcc.log.RedoLog;
+import org.lealone.p2p.config.Config;
+import org.lealone.storage.fs.FileUtils;
+import org.lealone.storage.memory.MemoryStorageEngine;
 import org.lealone.transaction.TransactionEngine;
 import org.lealone.transaction.TransactionEngineManager;
-
-import io.netty.util.internal.logging.InternalLoggerFactory;
-import io.netty.util.internal.logging.JdkLoggerFactory;
-import io.vertx.core.impl.FileResolver;
-import io.vertx.core.spi.resolver.ResolverProvider;
+import org.lealone.transaction.mvcc.log.LogSyncService;
 
 public class TestBase extends Assert {
+
+    public static interface SqlExecuter {
+        void execute(String sql);
+    }
+
     public static String url;
     public static final String DEFAULT_STORAGE_ENGINE_NAME = getDefaultStorageEngineName();
     public static final String TEST_BASE_DIR = "." + File.separatorChar + "target" + File.separatorChar + "test-data";
@@ -60,16 +64,15 @@ public class TestBase extends Assert {
         if (Config.getProperty("default.storage.engine") == null)
             Config.setProperty("default.storage.engine", getDefaultStorageEngineName());
 
-        setVertxProperties();
+        setConsoleLoggerFactory();
     }
 
-    private static void setVertxProperties() {
-        InternalLoggerFactory.setDefaultFactory(JdkLoggerFactory.INSTANCE);
-        System.setProperty(ResolverProvider.DISABLE_DNS_RESOLVER_PROP_NAME, "true");
+    public TestBase() {
+    }
 
-        System.setProperty(FileResolver.DISABLE_FILE_CACHING_PROP_NAME, "true");
-        System.setProperty(FileResolver.DISABLE_CP_RESOLVING_PROP_NAME, "true");
-        System.setProperty(FileResolver.CACHE_DIR_BASE_PROP_NAME, "./" + TEST_DIR + "/.vertx");
+    // 测试阶段使用ConsoleLog能加快启动速度，比logback快
+    public static void setConsoleLoggerFactory() {
+        System.setProperty(LoggerFactory.LOGGER_DELEGATE_FACTORY_CLASS_NAME, ConsoleLogDelegateFactory.class.getName());
     }
 
     public static String getDefaultStorageEngineName() {
@@ -82,8 +85,8 @@ public class TestBase extends Assert {
 
             Map<String, String> config = new HashMap<>();
             config.put("base_dir", TEST_DIR);
-            config.put("transaction_log_dir", "tlog");
-            config.put("log_sync_type", RedoLog.LOG_SYNC_TYPE_PERIODIC);
+            config.put("redo_log_dir", "redo_log");
+            config.put("log_sync_type", LogSyncService.LOG_SYNC_TYPE_PERIODIC);
             te.init(config);
         }
     }
@@ -107,6 +110,8 @@ public class TestBase extends Assert {
 
     private String host = Constants.DEFAULT_HOST;
     private int port = Constants.DEFAULT_TCP_PORT;
+
+    private String netFactoryName = Constants.DEFAULT_NET_FACTORY_NAME;
 
     public static String joinDirs(String... dirs) {
         StringBuilder s = new StringBuilder(TEST_DIR);
@@ -141,6 +146,11 @@ public class TestBase extends Assert {
 
     public TestBase setStorageEngineName(String name) {
         storageEngineName = name;
+        return this;
+    }
+
+    public TestBase setNetFactoryName(String name) {
+        netFactoryName = name;
         return this;
     }
 
@@ -211,7 +221,7 @@ public class TestBase extends Assert {
         StringBuilder url = new StringBuilder(100);
 
         url.append(Constants.URL_PREFIX);
-        if (inMemory) {
+        if (inMemory || MemoryStorageEngine.NAME.equalsIgnoreCase(storageEngineName)) {
             addConnectionParameter("PERSISTENT", "false");
         }
 
@@ -235,6 +245,7 @@ public class TestBase extends Assert {
         }
 
         url.append(dbName).append(firstSeparatorChar).append("default_storage_engine=").append(storageEngineName);
+        url.append(firstSeparatorChar).append(Constants.NET_FACTORY_NAME_KEY).append("=").append(netFactoryName);
 
         for (Map.Entry<String, String> e : connectionParameters.entrySet())
             url.append(separatorChar).append(e.getKey()).append('=').append(e.getValue());
@@ -260,5 +271,13 @@ public class TestBase extends Assert {
 
     public static void p() {
         System.out.println();
+    }
+
+    public static void deleteFileRecursive(String path) {
+        // 避免误删除
+        if (!path.startsWith(TEST_BASE_DIR)) {
+            throw new RuntimeException("invalid path: " + path + ", must be start with: " + TEST_BASE_DIR);
+        }
+        FileUtils.deleteRecursive(path, false);
     }
 }

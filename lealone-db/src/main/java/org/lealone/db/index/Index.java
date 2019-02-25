@@ -6,6 +6,9 @@
  */
 package org.lealone.db.index;
 
+import java.util.List;
+import java.util.Map;
+
 import org.lealone.db.ServerSession;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.SearchRow;
@@ -14,7 +17,8 @@ import org.lealone.db.schema.SchemaObject;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
+import org.lealone.storage.IterationParameters;
+import org.lealone.storage.PageKey;
 import org.lealone.storage.StorageMap;
 
 /**
@@ -44,6 +48,11 @@ public interface Index extends SchemaObject {
      */
     void add(ServerSession session, Row row);
 
+    default void update(ServerSession session, Row oldRow, Row newRow, List<Column> updateColumns) {
+        remove(session, oldRow);
+        add(session, newRow);
+    }
+
     /**
      * Remove a row from the index.
      *
@@ -62,15 +71,19 @@ public interface Index extends SchemaObject {
      */
     Cursor find(ServerSession session, SearchRow first, SearchRow last);
 
-    /**
-     * Find a row or a list of rows and create a cursor to iterate over the result.
-     *
-     * @param filter the table filter (which possibly knows about additional conditions)
-     * @param first the first row, or null for no limit
-     * @param last the last row, or null for no limit
-     * @return the cursor to iterate over the results
-     */
-    Cursor find(TableFilter filter, SearchRow first, SearchRow last);
+    Cursor find(ServerSession session, IterationParameters<SearchRow> parameters);
+
+    // /**
+    // * Find a row or a list of rows and create a cursor to iterate over the result.
+    // *
+    // * @param filter the table filter (which possibly knows about additional conditions)
+    // * @param first the first row, or null for no limit
+    // * @param last the last row, or null for no limit
+    // * @return the cursor to iterate over the results
+    // */
+    // Cursor find(TableFilter filter, SearchRow first, SearchRow last);
+    //
+    // Cursor find(TableFilter filter, SearchRow first, SearchRow last, List<PageKey> pageKeys);
 
     /**
      * Estimate the cost to search for rows given the search mask.
@@ -84,7 +97,7 @@ public interface Index extends SchemaObject {
      * @param sortOrder the sort order
      * @return the estimated cost
      */
-    double getCost(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder);
+    double getCost(ServerSession session, int[] masks, SortOrder sortOrder);
 
     /**
      * Remove the index.
@@ -168,6 +181,13 @@ public interface Index extends SchemaObject {
     long getDiskSpaceUsed();
 
     /**
+     * Get the used memory space for this index.
+     *
+     * @return the estimated number of bytes
+     */
+    long getMemorySpaceUsed();
+
+    /**
      * Compare two rows.
      *
      * @param rowData the first row
@@ -243,4 +263,6 @@ public interface Index extends SchemaObject {
     boolean canScan();
 
     StorageMap<? extends Object, ? extends Object> getStorageMap();
+
+    Map<String, List<PageKey>> getEndpointToPageKeyMap(ServerSession session, SearchRow first, SearchRow last);
 }

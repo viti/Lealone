@@ -11,13 +11,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.CamelCaseHelper;
-import org.lealone.common.util.New;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.constraint.Constraint;
 import org.lealone.db.constraint.ConstraintReferential;
 import org.lealone.db.schema.Schema;
@@ -26,13 +26,13 @@ import org.lealone.db.table.Column;
 import org.lealone.db.table.CreateTableData;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.Table;
-import org.lealone.db.value.CaseInsensitiveMap;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
 import org.lealone.sql.SQLStatement;
 import org.lealone.sql.dml.Insert;
 import org.lealone.sql.dml.Query;
 import org.lealone.sql.expression.Expression;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * This class represents the statement
@@ -47,7 +47,7 @@ public class CreateTable extends SchemaStatement {
     protected IndexColumn[] pkColumns;
     protected boolean ifNotExists;
 
-    private final ArrayList<DefineStatement> constraintCommands = New.arrayList();
+    private final ArrayList<DefinitionStatement> constraintCommands = new ArrayList<>();
     private boolean onCommitDrop;
     private boolean onCommitTruncate;
     private Query asQuery;
@@ -94,7 +94,7 @@ public class CreateTable extends SchemaStatement {
      *
      * @param command the statement to add
      */
-    public void addConstraintCommand(DefineStatement command) {
+    public void addConstraintCommand(DefinitionStatement command) {
         if (command instanceof CreateIndex) {
             constraintCommands.add(command);
         } else {
@@ -153,7 +153,7 @@ public class CreateTable extends SchemaStatement {
             // db.lockMeta(session);
             // }
             Table table = getSchema().createTable(data);
-            ArrayList<Sequence> sequences = New.arrayList();
+            ArrayList<Sequence> sequences = new ArrayList<>();
             for (Column c : data.columns) {
                 if (c.isAutoIncrement()) {
                     int objId = getObjectId();
@@ -180,13 +180,14 @@ public class CreateTable extends SchemaStatement {
                 db.addSchemaObject(session, table);
             }
             try {
+                TableFilter tf = new TableFilter(session, table, null, false, null);
                 for (Column c : data.columns) {
-                    c.prepareExpression(session);
+                    c.prepareExpression(session, tf);
                 }
                 for (Sequence sequence : sequences) {
                     table.addSequence(sequence);
                 }
-                for (DefineStatement command : constraintCommands) {
+                for (DefinitionStatement command : constraintCommands) {
                     command.update();
                 }
                 if (asQuery != null) {

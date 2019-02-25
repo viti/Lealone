@@ -8,21 +8,25 @@ package org.lealone.db.table;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.lealone.api.DatabaseEventListener;
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
+import org.lealone.common.util.CaseInsensitiveMap;
 import org.lealone.common.util.MathUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
+import org.lealone.common.util.Utils;
 import org.lealone.db.Constants;
+import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
 import org.lealone.db.SysProperties;
+import org.lealone.db.api.DatabaseEventListener;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.constraint.Constraint;
 import org.lealone.db.constraint.ConstraintReferential;
 import org.lealone.db.index.Cursor;
@@ -48,9 +52,9 @@ public class StandardTable extends Table {
 
     private final ConcurrentHashMap<ServerSession, ServerSession> sharedSessions = new ConcurrentHashMap<>();
     private final StandardPrimaryIndex primaryIndex;
-    private final ArrayList<Index> indexes = New.arrayList();
+    private final ArrayList<Index> indexes = Utils.newSmallArrayList();
     private final StorageEngine storageEngine;
-    private final String mapType;
+    private final Map<String, String> parameters;
     private final boolean globalTemporary;
 
     private long lastModificationId;
@@ -67,11 +71,23 @@ public class StandardTable extends Table {
         super(data.schema, data.id, data.tableName, data.persistIndexes, data.persistData);
         this.storageEngine = storageEngine;
         if (data.storageEngineParams != null) {
-            mapType = data.storageEngineParams.get("map_type");
+            parameters = data.storageEngineParams;
         } else {
-            mapType = null;
+            parameters = new CaseInsensitiveMap<>();
         }
         globalTemporary = data.globalTemporary;
+
+        String initReplicationEndpoints = null;
+        String replicationName = data.session.getReplicationName();
+        if (replicationName != null) {
+            int pos = replicationName.indexOf('@');
+            if (pos != -1) {
+                initReplicationEndpoints = replicationName.substring(0, pos);
+                parameters.put("initReplicationEndpoints", initReplicationEndpoints);
+            }
+        }
+        parameters.put("isShardingMode", data.session.getDatabase().isShardingMode() + "");
+
         isHidden = data.isHidden;
         nextAnalyze = database.getSettings().analyzeAuto;
 
@@ -91,12 +107,12 @@ public class StandardTable extends Table {
         return primaryIndex.getMapName();
     }
 
-    public String getMapType() {
-        return mapType;
-    }
-
     public StorageEngine getStorageEngine() {
         return storageEngine;
+    }
+
+    public Map<String, String> getParameters() {
+        return parameters;
     }
 
     /**
@@ -145,6 +161,10 @@ public class StandardTable extends Table {
                 buff.append(storageEngineName);
                 buff.append('\"');
             }
+        }
+        if (parameters != null && !parameters.isEmpty()) {
+            buff.append(" PARAMETERS");
+            Database.appendMap(buff, parameters);
         }
         if (!isPersistIndexes() && !isPersistData()) {
             buff.append("\nNOT PERSISTENT");
@@ -237,10 +257,10 @@ public class StandardTable extends Table {
             if (clash == null) {
                 // verification is started
                 clash = session;
-                visited = New.hashSet();
+                visited = new HashSet<>();
             } else if (clash == session) {
                 // we found a circle where this session is involved
-                return New.arrayList();
+                return new ArrayList<>(0);
             } else if (visited.contains(session)) {
                 // we have already checked this session.
                 // there is a circle, but the sessions in the circle need to
@@ -299,6 +319,10 @@ public class StandardTable extends Table {
 
     public Row getRow(ServerSession session, long key) {
         return primaryIndex.getRow(session, key);
+    }
+
+    public Row getRow(ServerSession session, long key, int[] columnIndexes) {
+        return primaryIndex.getRow(session, key, columnIndexes);
     }
 
     @Override
@@ -410,10 +434,10 @@ public class StandardTable extends Table {
         Cursor cursor = scan.find(session, null, null);
         long i = 0;
         int bufferSize = database.getMaxMemoryRows() / 2;
-        ArrayList<Row> buffer = New.arrayList(bufferSize);
+        ArrayList<Row> buffer = new ArrayList<>(bufferSize);
         String n = getName() + ":" + index.getName();
         int t = MathUtils.convertLongToInt(total);
-        ArrayList<String> bufferNames = New.arrayList();
+        ArrayList<String> bufferNames = Utils.newSmallArrayList();
         while (cursor.next()) {
             Row row = cursor.get();
             buffer.add(row);
@@ -449,7 +473,7 @@ public class StandardTable extends Table {
         Cursor cursor = scan.find(session, null, null);
         long i = 0;
         int bufferSize = (int) Math.min(total, database.getMaxMemoryRows());
-        ArrayList<Row> buffer = New.arrayList(bufferSize);
+        ArrayList<Row> buffer = new ArrayList<>(bufferSize);
         String n = getName() + ":" + index.getName();
         int t = MathUtils.convertLongToInt(total);
         while (cursor.next()) {
@@ -508,6 +532,44 @@ public class StandardTable extends Table {
     }
 
     @Override
+    public void addRow(ServerSession session, Row row) {
+        row.setVersion(getVersion());
+        lastModificationId = database.getNextModificationDataId();
+        Transaction t = session.getTransaction();
+        int savepointId = t.getSavepointId();
+        try {
+            // 第一个是PrimaryIndex
+            for (int i = 0, size = indexes.size(); i < size; i++) {
+                Index index = indexes.get(i);
+                index.add(session, row);
+            }
+        } catch (Throwable e) {
+            t.rollbackToSavepoint(savepointId);
+            throw DbException.convert(e);
+        }
+        analyzeIfRequired(session);
+    }
+
+    @Override
+    public void updateRow(ServerSession session, Row oldRow, Row newRow, List<Column> updateColumns) {
+        newRow.setVersion(getVersion());
+        lastModificationId = database.getNextModificationDataId();
+        Transaction t = session.getTransaction();
+        int savepointId = t.getSavepointId();
+        try {
+            // 第一个是PrimaryIndex
+            for (int i = 0, size = indexes.size(); i < size; i++) {
+                Index index = indexes.get(i);
+                index.update(session, oldRow, newRow, updateColumns);
+            }
+        } catch (Throwable e) {
+            t.rollbackToSavepoint(savepointId);
+            throw DbException.convert(e);
+        }
+        analyzeIfRequired(session);
+    }
+
+    @Override
     public void removeRow(ServerSession session, Row row) {
         lastModificationId = database.getNextModificationDataId();
         Transaction t = session.getTransaction();
@@ -532,25 +594,6 @@ public class StandardTable extends Table {
             index.truncate(session);
         }
         changesSinceAnalyze = 0;
-    }
-
-    @Override
-    public void addRow(ServerSession session, Row row) {
-        row.setVersion(getVersion());
-        lastModificationId = database.getNextModificationDataId();
-        Transaction t = session.getTransaction();
-        int savepointId = t.getSavepointId();
-        try {
-            // 第一个是PrimaryIndex
-            for (int i = 0, size = indexes.size(); i < size; i++) {
-                Index index = indexes.get(i);
-                index.add(session, row);
-            }
-        } catch (Throwable e) {
-            t.rollbackToSavepoint(savepointId);
-            throw DbException.convert(e);
-        }
-        analyzeIfRequired(session);
     }
 
     protected void analyzeIfRequired(ServerSession session) {

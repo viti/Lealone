@@ -31,22 +31,22 @@ public interface Session extends Closeable, Transaction.Participant {
     public static final int SESSION_SET_AUTO_COMMIT = 2;
     public static final int SESSION_CLOSE = 3;
 
-    public static final int RESULT_FETCH_ROWS = 30;
-    public static final int RESULT_CHANGE_ID = 31;
-    public static final int RESULT_RESET = 32;
-    public static final int RESULT_CLOSE = 33;
+    public static final int RESULT_FETCH_ROWS = 20;
+    public static final int RESULT_CHANGE_ID = 21;
+    public static final int RESULT_RESET = 22;
+    public static final int RESULT_CLOSE = 23;
 
-    public static final int COMMAND_QUERY = 50;
-    public static final int COMMAND_UPDATE = 51;
+    public static final int COMMAND_QUERY = 40;
+    public static final int COMMAND_UPDATE = 41;
 
-    public static final int COMMAND_PREPARE = 52;
-    public static final int COMMAND_PREPARE_READ_PARAMS = 53;
-    public static final int COMMAND_PREPARED_QUERY = 54;
-    public static final int COMMAND_PREPARED_UPDATE = 55;
+    public static final int COMMAND_PREPARE = 50;
+    public static final int COMMAND_PREPARE_READ_PARAMS = 51;
+    public static final int COMMAND_PREPARED_QUERY = 52;
+    public static final int COMMAND_PREPARED_UPDATE = 53;
 
-    public static final int COMMAND_GET_META_DATA = 56;
-    public static final int COMMAND_READ_LOB = 57;
-    public static final int COMMAND_CLOSE = 58;
+    public static final int COMMAND_GET_META_DATA = 70;
+    public static final int COMMAND_READ_LOB = 71;
+    public static final int COMMAND_CLOSE = 72;
 
     public static final int COMMAND_REPLICATION_UPDATE = 80;
     public static final int COMMAND_REPLICATION_PREPARED_UPDATE = 81;
@@ -80,14 +80,15 @@ public interface Session extends Closeable, Transaction.Participant {
     public static final int COMMAND_STORAGE_PREPARE_MOVE_LEAF_PAGE = 180;
     public static final int COMMAND_STORAGE_MOVE_LEAF_PAGE = 181;
     public static final int COMMAND_STORAGE_REMOVE_LEAF_PAGE = 182;
-    public static final int COMMAND_STORAGE_MOVE_PAGE = 183;
+    public static final int COMMAND_STORAGE_REPLICATE_ROOT_PAGES = 183;
     public static final int COMMAND_STORAGE_READ_PAGE = 184;
 
-    public static final int COMMAND_STORAGE_MESSAGE = 10000;
+    public static final int COMMAND_P2P_MESSAGE = 300;
 
     public static final int STATUS_OK = 1000;
     public static final int STATUS_CLOSED = 1001;
     public static final int STATUS_ERROR = 1002;
+    public static final int STATUS_RUN_MODE_CHANGED = 1003;
 
     Command createCommand(String sql, int fetchSize);
 
@@ -157,6 +158,8 @@ public interface Session extends Closeable, Transaction.Participant {
 
     Transaction getTransaction();
 
+    Transaction getTransaction(PreparedStatement statement);
+
     Transaction getParentTransaction();
 
     void setParentTransaction(Transaction transaction);
@@ -187,7 +190,7 @@ public interface Session extends Closeable, Transaction.Participant {
 
     StorageMap<Object, Object> getStorageMap(String mapName);
 
-    void addRootPages(String dbName, ByteBuffer rootPages);
+    void replicateRootPages(String dbName, ByteBuffer rootPages);
 
     int getNextId();
 
@@ -225,4 +228,21 @@ public interface Session extends Closeable, Transaction.Participant {
     }
 
     int getSessionId();
+
+    boolean isRunModeChanged();
+
+    String getNewTargetEndpoints();
+
+    void runModeChanged(String newTargetEndpoints);
+
+    default void reconnectIfNeeded() {
+    }
+
+    default IDatabase getDatabase() {
+        return null;
+    }
+
+    default Session getNestedSession(String hostAndPort, boolean remote) {
+        return null;
+    }
 }

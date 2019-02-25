@@ -30,7 +30,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.TraceObject;
 import org.lealone.common.util.CloseWatcher;
@@ -40,6 +39,7 @@ import org.lealone.db.ConnectionInfo;
 import org.lealone.db.Constants;
 import org.lealone.db.Session;
 import org.lealone.db.SysProperties;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.Result;
 import org.lealone.db.value.CompareMode;
 import org.lealone.db.value.Value;
@@ -85,8 +85,11 @@ public class JdbcConnection extends TraceObject implements Connection {
      * INTERNAL
      */
     public JdbcConnection(String url, Properties info) throws SQLException {
+        this(new ConnectionInfo(url, info));
+    }
+
+    public JdbcConnection(ConnectionInfo ci) throws SQLException {
         try {
-            ConnectionInfo ci = new ConnectionInfo(url, info);
             // this will return an embedded or server connection
             session = ci.createSession().connect();
             trace = session.getTrace();
@@ -94,7 +97,6 @@ public class JdbcConnection extends TraceObject implements Connection {
             setTrace(trace, TraceObject.CONNECTION, id);
             user = ci.getUserName();
             url = ci.getURL(); // 不含参数
-            this.url = url;
             if (isInfoEnabled()) {
                 String code = String.format("Connection %s = DriverManager.getConnection(%s, %s, \"\");",
                         getTraceObjectName(), quote(url), quote(user));
@@ -403,6 +405,8 @@ public class JdbcConnection extends TraceObject implements Connection {
             commit.executeUpdate();
         } catch (Exception e) {
             throw logAndConvert(e);
+        } finally {
+            session.reconnectIfNeeded();
         }
     }
 
@@ -420,6 +424,8 @@ public class JdbcConnection extends TraceObject implements Connection {
             rollbackInternal();
         } catch (Exception e) {
             throw logAndConvert(e);
+        } finally {
+            session.reconnectIfNeeded();
         }
     }
 
@@ -944,6 +950,8 @@ public class JdbcConnection extends TraceObject implements Connection {
             sp.rollback();
         } catch (Exception e) {
             throw logAndConvert(e);
+        } finally {
+            session.reconnectIfNeeded();
         }
     }
 

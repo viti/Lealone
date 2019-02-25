@@ -14,8 +14,7 @@ import org.lealone.sql.SQLStatement;
 /**
  * Represents a transactional statement.
  */
-public class TransactionStatement extends ManipulateStatement {
-    public static final String INTERNAL_SAVEPOINT = "_INTERNAL_SAVEPOINT_";
+public class TransactionStatement extends ManipulationStatement {
 
     private final int type;
     private String savepointName;
@@ -68,15 +67,15 @@ public class TransactionStatement extends ManipulateStatement {
         case SQLStatement.ROLLBACK:
             session.rollback();
             break;
-        case SQLStatement.CHECKPOINT:
-            session.getUser().checkAdmin();
-            session.getDatabase().checkpoint();
-            break;
         case SQLStatement.SAVEPOINT:
             session.addSavepoint(savepointName);
             break;
         case SQLStatement.ROLLBACK_TO_SAVEPOINT:
             session.rollbackToSavepoint(savepointName);
+            break;
+        case SQLStatement.CHECKPOINT:
+            session.getUser().checkAdmin();
+            session.getDatabase().checkpoint();
             break;
         case SQLStatement.CHECKPOINT_SYNC:
             session.getUser().checkAdmin();

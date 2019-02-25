@@ -6,10 +6,10 @@
  */
 package org.lealone.sql.ddl;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.auth.User;
 import org.lealone.sql.SQLStatement;
 
@@ -20,7 +20,7 @@ import org.lealone.sql.SQLStatement;
  * @author H2 Group
  * @author zhh
  */
-public class DropUser extends DefineStatement implements AuthStatement {
+public class DropUser extends DefinitionStatement implements AuthStatement {
 
     private boolean ifExists;
     private String userName;

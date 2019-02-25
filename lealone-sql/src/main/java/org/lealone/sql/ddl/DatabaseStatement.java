@@ -17,15 +17,15 @@
  */
 package org.lealone.sql.ddl;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.Database;
 import org.lealone.db.LealoneDatabase;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.net.NetEndpoint;
-import org.lealone.sql.router.RouterHolder;
+import org.lealone.sql.router.SQLRouter;
 
-public abstract class DatabaseStatement extends DefineStatement {
+public abstract class DatabaseStatement extends DefinitionStatement {
 
     protected DatabaseStatement(ServerSession session) {
         super(session);
@@ -58,7 +58,7 @@ public abstract class DatabaseStatement extends DefineStatement {
 
     protected void executeDatabaseStatement(Database db) {
         if (session.isRoot()) {
-            RouterHolder.getRouter().executeDatabaseStatement(db, session, this);
+            SQLRouter.executeDatabaseStatement(db, session, this);
         }
     }
 }

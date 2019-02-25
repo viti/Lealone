@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.util.List;
+import java.util.Map;
 
 import org.lealone.db.Session;
 import org.lealone.net.NetEndpoint;
@@ -53,6 +54,11 @@ public class DelegatedStorageMap<K, V> implements StorageMap<K, V> {
     @Override
     public V get(K key) {
         return map.get(key);
+    }
+
+    @Override
+    public V get(K key, int[] columnIndexes) {
+        return map.get(key, columnIndexes);
     }
 
     @Override
@@ -141,6 +147,11 @@ public class DelegatedStorageMap<K, V> implements StorageMap<K, V> {
     }
 
     @Override
+    public StorageMapCursor<K, V> cursor(IterationParameters<K> parameters) {
+        return map.cursor(parameters);
+    }
+
+    @Override
     public void clear() {
         map.clear();
     }
@@ -186,13 +197,13 @@ public class DelegatedStorageMap<K, V> implements StorageMap<K, V> {
     }
 
     @Override
-    public void addLeafPage(ByteBuffer splitKey, ByteBuffer page) {
-        map.addLeafPage(splitKey, page);
+    public void addLeafPage(PageKey pageKey, ByteBuffer page, boolean addPage) {
+        map.addLeafPage(pageKey, page, addPage);
     }
 
     @Override
-    public void removeLeafPage(ByteBuffer key) {
-        map.removeLeafPage(key);
+    public void removeLeafPage(PageKey pageKey) {
+        map.removeLeafPage(pageKey);
     }
 
     @Override
@@ -226,7 +237,42 @@ public class DelegatedStorageMap<K, V> implements StorageMap<K, V> {
     }
 
     @Override
-    public ByteBuffer readPage(ByteBuffer key, boolean last) {
-        return map.readPage(key, last);
+    public ByteBuffer readPage(PageKey pageKey) {
+        return map.readPage(pageKey);
+    }
+
+    @Override
+    public void setRootPage(ByteBuffer buff) {
+        map.setRootPage(buff);
+    }
+
+    @Override
+    public long getDiskSpaceUsed() {
+        return map.getDiskSpaceUsed();
+    }
+
+    @Override
+    public long getMemorySpaceUsed() {
+        return map.getDiskSpaceUsed();
+    }
+
+    @Override
+    public Map<String, List<PageKey>> getEndpointToPageKeyMap(Session session, K from, K to) {
+        return map.getEndpointToPageKeyMap(session, from, to);
+    }
+
+    @Override
+    public void setMaxKey(Object key) {
+        map.setMaxKey(key);
+    }
+
+    @Override
+    public long getMaxKeyAsLong() {
+        return map.getMaxKeyAsLong();
+    }
+
+    @Override
+    public long incrementAndGetMaxKeyAsLong() {
+        return map.incrementAndGetMaxKeyAsLong();
     }
 }

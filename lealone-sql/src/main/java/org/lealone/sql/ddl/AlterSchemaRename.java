@@ -8,11 +8,11 @@ package org.lealone.sql.ddl;
 
 import java.util.ArrayList;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.Database;
 import org.lealone.db.DbObjectType;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.SchemaObject;
 import org.lealone.sql.SQLStatement;
@@ -24,7 +24,7 @@ import org.lealone.sql.SQLStatement;
  * @author H2 Group
  * @author zhh
  */
-public class AlterSchemaRename extends DefineStatement {
+public class AlterSchemaRename extends DefinitionStatement {
 
     private Schema oldSchema;
     private String newSchemaName;

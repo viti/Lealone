@@ -10,13 +10,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
 import org.lealone.db.Constants;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.Row;
 import org.lealone.db.result.SearchRow;
 import org.lealone.db.result.SortOrder;
@@ -24,11 +25,12 @@ import org.lealone.db.table.Column;
 import org.lealone.db.table.IndexColumn;
 import org.lealone.db.table.StandardTable;
 import org.lealone.db.table.TableAlterHistoryRecord;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
 import org.lealone.db.value.ValueLong;
 import org.lealone.db.value.ValueNull;
+import org.lealone.storage.IterationParameters;
+import org.lealone.storage.PageKey;
 import org.lealone.storage.Storage;
 import org.lealone.storage.StorageMap;
 import org.lealone.transaction.Transaction;
@@ -63,24 +65,14 @@ public class StandardPrimaryIndex extends IndexBase {
         }
         ValueDataType keyType = new ValueDataType(null, null, null);
         ValueDataType valueType = new ValueDataType(database, database.getCompareMode(), sortTypes);
-        VersionedValueType vvType = new VersionedValueType(valueType);
+        VersionedValueType vvType = new VersionedValueType(valueType, columns.length);
 
         Storage storage = database.getStorage(table.getStorageEngine());
         TransactionEngine transactionEngine = database.getTransactionEngine();
 
-        String initReplicationEndpoints = null;
-        String replicationName = session.getReplicationName();
-        if (replicationName != null) {
-            int pos = replicationName.indexOf('@');
-            if (pos != -1) {
-                initReplicationEndpoints = replicationName.substring(0, pos);
-            }
-        }
-
         // session.isShardingMode()是针对当前session的，如果是SystemSession，就算数据库是ShardingMode，也不管它
         Transaction t = transactionEngine.beginTransaction(false, session.isShardingMode());
-        dataMap = t.openMap(mapName, table.getMapType(), keyType, vvType, storage,
-                session.getDatabase().isShardingMode(), initReplicationEndpoints);
+        dataMap = t.openMap(mapName, keyType, vvType, storage, table.getParameters());
         transactionEngine.addTransactionMap(dataMap);
         t.commit(); // 避免产生内部未提交的事务
     }
@@ -173,6 +165,44 @@ public class StandardPrimaryIndex extends IndexBase {
     }
 
     @Override
+    public void update(ServerSession session, Row oldRow, Row newRow, List<Column> updateColumns) {
+        if (table.getContainsLargeObject()) {
+            for (int i = 0, len = newRow.getColumnCount(); i < len; i++) {
+                Value v = newRow.getValue(i);
+                Value v2 = v.link(database, getId());
+                if (v2.isLinked()) {
+                    session.unlinkAtCommitStop(v2);
+                }
+                if (v != v2) {
+                    newRow.setValue(i, v2);
+                }
+            }
+            for (int i = 0, len = oldRow.getColumnCount(); i < len; i++) {
+                Value v = oldRow.getValue(i);
+                if (v.isLinked()) {
+                    session.unlinkAtCommit(v);
+                }
+            }
+        }
+        TransactionMap<Value, VersionedValue> map = getMap(session);
+        VersionedValue oldValue = new VersionedValue(oldRow.getVersion(), ValueArray.get(oldRow.getValueList()));
+        VersionedValue newValue = new VersionedValue(newRow.getVersion(), ValueArray.get(newRow.getValueList()));
+        Value key = ValueLong.get(newRow.getKey());
+        int size = updateColumns.size();
+        int[] columnIndexes = new int[size];
+        for (int i = 0; i < size; i++) {
+            columnIndexes[i] = updateColumns.get(i).getColumnId();
+        }
+        try {
+            map.put(key, oldValue, newValue, columnIndexes);
+        } catch (IllegalStateException e) {
+            throw DbException.get(ErrorCode.CONCURRENT_UPDATE_1, e, table.getName());
+        }
+        session.setLastRow(newRow);
+        session.setLastIndex(this);
+    }
+
+    @Override
     public void remove(ServerSession session, Row row) {
         if (table.getContainsLargeObject()) {
             for (int i = 0, len = row.getColumnCount(); i < len; i++) {
@@ -195,45 +225,33 @@ public class StandardPrimaryIndex extends IndexBase {
 
     @Override
     public Cursor find(ServerSession session, SearchRow first, SearchRow last) {
-        ValueLong min, max;
-        if (first == null) {
-            min = MIN;
-        } else if (mainIndexColumn < 0) {
-            min = ValueLong.get(first.getKey());
-        } else {
-            ValueLong v = (ValueLong) first.getValue(mainIndexColumn);
-            if (v == null) {
-                min = ValueLong.get(first.getKey());
-            } else {
-                min = v;
-            }
-        }
-        if (last == null) {
-            max = MAX;
-        } else if (mainIndexColumn < 0) {
-            max = ValueLong.get(last.getKey());
-        } else {
-            ValueLong v = (ValueLong) last.getValue(mainIndexColumn);
-            if (v == null) {
-                max = ValueLong.get(last.getKey());
-            } else {
-                max = v;
-            }
-        }
-        return new StandardPrimaryIndexCursor(session, table, this, getMap(session).entryIterator(min), max);
+        return find(session, IterationParameters.create(first, last));
+    }
+
+    @Override
+    public Cursor find(ServerSession session, IterationParameters<SearchRow> parameters) {
+        ValueLong[] minAndMaxValues = getMinAndMaxValues(parameters.from, parameters.to);
+        IterationParameters<Value> newParameters = parameters.copy(minAndMaxValues[0], minAndMaxValues[1]);
+        return new StandardPrimaryIndexCursor(session, table, this, getMap(session).entryIterator(newParameters),
+                minAndMaxValues[1]);
     }
 
     @Override
     public Row getRow(ServerSession session, long key) {
-        VersionedValue v = getMap(session).get(ValueLong.get(key));
+        return getRow(session, key, null);
+    }
+
+    public Row getRow(ServerSession session, long key, int[] columnIndexes) {
+        VersionedValue v = getMap(session).get(ValueLong.get(key), columnIndexes);
         ValueArray array = v.value;
         Row row = new Row(array.getList(), 0);
         row.setKey(key);
+        row.setVersion(v.vertion);
         return row;
     }
 
     @Override
-    public double getCost(ServerSession session, int[] masks, TableFilter filter, SortOrder sortOrder) {
+    public double getCost(ServerSession session, int[] masks, SortOrder sortOrder) {
         try {
             long cost = 10 * (dataMap.rawSize() + Constants.COST_ROW_OFFSET);
             return cost;
@@ -315,8 +333,12 @@ public class StandardPrimaryIndex extends IndexBase {
 
     @Override
     public long getDiskSpaceUsed() {
-        // TODO estimate disk space usage
-        return 0;
+        return dataMap.getDiskSpaceUsed();
+    }
+
+    @Override
+    public long getMemorySpaceUsed() {
+        return dataMap.getMemorySpaceUsed();
     }
 
     /**
@@ -377,6 +399,51 @@ public class StandardPrimaryIndex extends IndexBase {
     @Override
     public StorageMap<? extends Object, ? extends Object> getStorageMap() {
         return dataMap;
+    }
+
+    private ValueLong[] getMinAndMaxValues(SearchRow first, SearchRow last) {
+        ValueLong min, max;
+        if (first == null) {
+            min = MIN;
+        } else if (mainIndexColumn < 0) {
+            min = ValueLong.get(first.getKey());
+        } else {
+            Value value = first.getValue(mainIndexColumn);
+            ValueLong v;
+            if (value instanceof ValueLong)
+                v = (ValueLong) value;
+            else
+                v = ValueLong.get(value.getLong());
+            if (v == null) {
+                min = ValueLong.get(first.getKey());
+            } else {
+                min = v;
+            }
+        }
+        if (last == null) {
+            max = MAX;
+        } else if (mainIndexColumn < 0) {
+            max = ValueLong.get(last.getKey());
+        } else {
+            Value value = first.getValue(mainIndexColumn);
+            ValueLong v;
+            if (value instanceof ValueLong)
+                v = (ValueLong) value;
+            else
+                v = ValueLong.get(value.getLong());
+            if (v == null) {
+                max = ValueLong.get(last.getKey());
+            } else {
+                max = v;
+            }
+        }
+        return new ValueLong[] { min, max };
+    }
+
+    @Override
+    public Map<String, List<PageKey>> getEndpointToPageKeyMap(ServerSession session, SearchRow first, SearchRow last) {
+        ValueLong[] minAndMaxValues = getMinAndMaxValues(first, last);
+        return getMap(session).getEndpointToPageKeyMap(session, minAndMaxValues[0], minAndMaxValues[1]);
     }
 
     /**

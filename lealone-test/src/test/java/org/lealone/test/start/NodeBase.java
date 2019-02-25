@@ -17,12 +17,10 @@
  */
 package org.lealone.test.start;
 
-import org.lealone.aose.config.Config;
-import org.lealone.aose.config.YamlConfigLoader;
 import org.lealone.common.exceptions.ConfigException;
 import org.lealone.main.Lealone;
-
-import io.vertx.core.impl.FileResolver;
+import org.lealone.p2p.config.Config;
+import org.lealone.p2p.config.YamlConfigLoader;
 
 public class NodeBase extends YamlConfigLoader {
 
@@ -35,7 +33,7 @@ public class NodeBase extends YamlConfigLoader {
         System.setProperty("lealone.config.loader", loader.getName());
         System.setProperty("lealone.config", "lealone-test.yaml");
 
-        // System.setProperty("lealone.load.ring.state", "false"); // 不从peers表加载ring状态信息
+        System.setProperty("lealone.load.persisted.node.info", "false"); // 不从nodes表加载ring状态信息
 
         // 见P2pServer.getRingDelay()
         // 默认30秒，等太久了
@@ -71,9 +69,6 @@ public class NodeBase extends YamlConfigLoader {
 
         System.setProperty("java.io.tmpdir", "./" + config.base_dir + "/tmp");
         System.setProperty("lealone.base.dir", "./" + config.base_dir);
-
-        System.setProperty(FileResolver.DISABLE_CP_RESOLVING_PROP_NAME, "true");
-        System.setProperty("vertx.cacheDirBase", "./" + config.base_dir + "/.vertx");
 
         super.applyConfig(config);
     }

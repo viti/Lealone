@@ -7,18 +7,16 @@
 package org.lealone.db;
 
 import java.io.IOException;
-import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Properties;
 import java.util.StringTokenizer;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.security.SHA256;
-import org.lealone.common.util.New;
 import org.lealone.common.util.SortedProperties;
 import org.lealone.common.util.StringUtils;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.storage.fs.FilePathEncrypt;
 import org.lealone.storage.fs.FileUtils;
 
@@ -30,14 +28,14 @@ import org.lealone.storage.fs.FileUtils;
  */
 public class ConnectionInfo implements Cloneable {
 
-    private static final HashSet<String> KNOWN_SETTINGS = New.hashSet();
+    private static final HashSet<String> KNOWN_SETTINGS = new HashSet<>();
 
     static {
         KNOWN_SETTINGS.addAll(DbSettings.getDefaultSettings().getSettings().keySet());
         KNOWN_SETTINGS.addAll(SetTypes.getTypes());
 
         String[] connectionSettings = { "IGNORE_UNKNOWN_SETTINGS", "INIT", "USER", "PASSWORD", "PASSWORD_HASH",
-                "IS_LOCAL" };
+                "IS_LOCAL", Constants.NET_FACTORY_NAME_KEY };
 
         for (String key : connectionSettings) {
             if (SysProperties.CHECK && KNOWN_SETTINGS.contains(key)) {
@@ -71,6 +69,8 @@ public class ConnectionInfo implements Cloneable {
     private SessionFactory sessionFactory;
 
     private Boolean persistent; // 首次调用isPersistent()时才初始化
+
+    private String netFactoryName = Constants.DEFAULT_NET_FACTORY_NAME;
 
     public ConnectionInfo() {
     }
@@ -124,6 +124,7 @@ public class ConnectionInfo implements Cloneable {
                 setBaseDir(baseDir);
             }
         }
+        netFactoryName = removeProperty(Constants.NET_FACTORY_NAME_KEY, Constants.DEFAULT_NET_FACTORY_NAME);
     }
 
     private void checkURL() {
@@ -654,21 +655,21 @@ public class ConnectionInfo implements Cloneable {
         return DbException.get(ErrorCode.URL_FORMAT_ERROR_2, Constants.URL_FORMAT, url);
     }
 
-    public Session createSession() throws SQLException {
+    public Session createSession() {
         return getSessionFactory().createSession(this);
     }
 
     public SessionFactory getSessionFactory() {
         if (sessionFactory == null) {
             try {
+                String className;
                 // 要使用反射，避免编译期依赖
                 if (remote) {
-                    sessionFactory = (SessionFactory) Class.forName("org.lealone.client.ClientSessionFactory")
-                            .getMethod("getInstance").invoke(null);
+                    className = "org.lealone.client.ClientSessionFactory";
                 } else {
-                    sessionFactory = (SessionFactory) Class.forName("org.lealone.db.DatabaseEngine")
-                            .getMethod("getSessionFactory").invoke(null);
+                    className = "org.lealone.db.ServerSessionFactory";
                 }
+                sessionFactory = (SessionFactory) Class.forName(className).getMethod("getInstance").invoke(null);
             } catch (Exception e) {
                 throw DbException.convert(e);
             }
@@ -722,5 +723,9 @@ public class ConnectionInfo implements Cloneable {
         ci.sessionFactory = sessionFactory;
         ci.persistent = persistent;
         return ci;
+    }
+
+    public String getNetFactoryName() {
+        return netFactoryName;
     }
 }

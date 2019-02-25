@@ -9,23 +9,25 @@ package org.lealone.sql.expression;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.Set;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.StringUtils;
 import org.lealone.db.Database;
+import org.lealone.db.DbObject;
 import org.lealone.db.ServerSession;
-import org.lealone.db.expression.ExpressionVisitor;
+import org.lealone.db.Session;
 import org.lealone.db.table.Column;
-import org.lealone.db.table.ColumnResolver;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
+import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * An expression is a operation, a value, or a function in a query.
  */
-public abstract class Expression implements org.lealone.db.expression.Expression {
+public abstract class Expression implements org.lealone.sql.IExpression {
 
     private boolean addedToFilter;
 
@@ -36,6 +38,10 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @return the result
      */
     @Override
+    public Value getValue(Session session) {
+        return getValue((ServerSession) session);
+    }
+
     public abstract Value getValue(ServerSession session);
 
     /**
@@ -53,7 +59,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param resolver the column resolver
      * @param level the subquery nesting level
      */
-    @Override
     public abstract void mapColumns(ColumnResolver resolver, int level);
 
     /**
@@ -62,8 +67,12 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param session the session
      * @return the optimized expression
      */
-    @Override
     public abstract Expression optimize(ServerSession session);
+
+    @Override
+    public Expression optimize(Session session) {
+        return optimize((ServerSession) session);
+    }
 
     /**
      * Tell the expression columns whether the table filter can return values now.
@@ -72,7 +81,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param tableFilter the table filter
      * @param value true if the table filter can return value
      */
-    @Override
     public abstract void setEvaluatable(TableFilter tableFilter, boolean value);
 
     /**
@@ -133,7 +141,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param visitor the visitor
      * @return if the criteria can be fulfilled
      */
-    @Override
     public abstract boolean isEverything(ExpressionVisitor visitor);
 
     /**
@@ -195,7 +202,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param session the session
      * @return the result
      */
-    @Override
     public Boolean getBooleanValue(ServerSession session) {
         return getValue(session).getBoolean();
     }
@@ -206,7 +212,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param session the session
      * @param filter the table filter
      */
-    @Override
     public void createIndexConditions(ServerSession session, TableFilter filter) {
         // default is do nothing
     }
@@ -287,7 +292,6 @@ public abstract class Expression implements org.lealone.db.expression.Expression
      * @param filter the table filter
      * @param outerJoin if the expression is part of an outer join
      */
-    @Override
     public void addFilterConditions(TableFilter filter, boolean outerJoin) {
         if (!addedToFilter && !outerJoin && isEverything(ExpressionVisitor.EVALUATABLE_VISITOR)) {
             filter.addFilterCondition(this, false);
@@ -370,5 +374,19 @@ public abstract class Expression implements org.lealone.db.expression.Expression
 
     public Value getMergedValue(ServerSession session) {
         return getValue(session);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void getDependencies(Set<?> dependencies) {
+        ExpressionVisitor visitor = ExpressionVisitor.getDependenciesVisitor((Set<DbObject>) dependencies);
+        isEverything(visitor);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void getColumns(Set<?> columns) {
+        ExpressionVisitor visitor = ExpressionVisitor.getColumnsVisitor((Set<Column>) columns);
+        isEverything(visitor);
     }
 }

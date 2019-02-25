@@ -10,33 +10,33 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
-import org.lealone.api.ErrorCode;
 import org.lealone.common.exceptions.DbException;
-import org.lealone.common.util.New;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
-import org.lealone.db.expression.ExpressionVisitor;
+import org.lealone.db.api.ErrorCode;
 import org.lealone.db.result.LocalResult;
 import org.lealone.db.result.Result;
 import org.lealone.db.result.ResultTarget;
-import org.lealone.db.result.SelectOrderBy;
 import org.lealone.db.result.SortOrder;
-import org.lealone.db.table.ColumnResolver;
+import org.lealone.db.table.Column;
 import org.lealone.db.table.Table;
-import org.lealone.db.table.TableFilter;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueInt;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.Alias;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
+import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.Parameter;
+import org.lealone.sql.expression.SelectOrderBy;
 import org.lealone.sql.expression.ValueExpression;
+import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.optimizer.TableFilter;
 
 /**
  * Represents a SELECT statement (simple, or union).
  */
-public abstract class Query extends ManipulateStatement implements org.lealone.db.expression.Query {
+public abstract class Query extends ManipulationStatement implements org.lealone.sql.IQuery {
 
     /**
      * The limit expression as specified in the LIMIT or TOP clause.
@@ -195,7 +195,6 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
      * @param visitor the visitor
      * @return if the criteria can be fulfilled
      */
-    @Override
     public abstract boolean isEverything(ExpressionVisitor visitor);
 
     /**
@@ -274,7 +273,7 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
     public final Value[] getParameterValues() {
         ArrayList<Parameter> list = getParameters();
         if (list == null) {
-            list = New.arrayList();
+            list = new ArrayList<>();
         }
         int size = list.size();
         Value[] params = new Value[size];
@@ -345,7 +344,7 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
             ArrayList<SelectOrderBy> orderList, int visible, boolean mustBeInResult, ArrayList<TableFilter> filters) {
         Database db = session.getDatabase();
         for (SelectOrderBy o : orderList) {
-            Expression e = (Expression) o.expression;
+            Expression e = o.expression;
             if (e == null) {
                 continue;
             }
@@ -448,11 +447,12 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
         int size = orderList.size();
         int[] index = new int[size];
         int[] sortType = new int[size];
+        Column[] orderColumns = new Column[size];
         for (int i = 0; i < size; i++) {
             SelectOrderBy o = orderList.get(i);
             int idx;
             boolean reverse = false;
-            Expression expr = (Expression) o.columnIndexExpr;
+            Expression expr = o.columnIndexExpr;
             Value v = expr.getValue(null);
             if (v == ValueNull.INSTANCE) {
                 // parameter not yet set - order by first column
@@ -480,8 +480,26 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
                 type += SortOrder.NULLS_LAST;
             }
             sortType[i] = type;
+            orderColumns[i] = getOrderColumn(orderList, i);
         }
-        return new SortOrder(session.getDatabase(), index, sortType, orderList);
+        return new SortOrder(session.getDatabase(), index, sortType, orderColumns);
+    }
+
+    private static Column getOrderColumn(ArrayList<SelectOrderBy> orderList, int index) {
+        SelectOrderBy order = orderList.get(index);
+        Expression expr = order.expression;
+        if (expr == null) {
+            return null;
+        }
+        expr = expr.getNonAliasExpression();
+        if (expr.isConstant()) {
+            return null;
+        }
+        if (!(expr instanceof ExpressionColumn)) {
+            return null;
+        }
+        ExpressionColumn exprCol = (ExpressionColumn) expr;
+        return exprCol.getColumn();
     }
 
     public void setOffset(Expression offset) {
@@ -507,7 +525,7 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
      */
     void addParameter(Parameter param) {
         if (parameters == null) {
-            parameters = New.arrayList();
+            parameters = new ArrayList<>();
         }
         parameters.add(param);
     }
@@ -542,11 +560,8 @@ public abstract class Query extends ManipulateStatement implements org.lealone.d
 
     public abstract List<TableFilter> getTopFilters();
 
-    // Query单独出现时不管涉及多少行记录都认为不是批量的，只有Query用于Insert时才有效
     @Override
-    public boolean isBatch() {
-        return false;
+    public boolean isDeterministic() {
+        return isEverything(ExpressionVisitor.DETERMINISTIC_VISITOR);
     }
-
-    public abstract boolean isBatchForInsert();
 }

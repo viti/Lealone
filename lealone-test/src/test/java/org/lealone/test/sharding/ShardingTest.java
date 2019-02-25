@@ -39,17 +39,63 @@ public class ShardingTest extends SqlTestBase {
 
         String dbName = "ShardingTestDB1";
         sql = "CREATE DATABASE IF NOT EXISTS " + dbName
-                + " RUN MODE sharding WITH REPLICATION STRATEGY (class: 'SimpleStrategy', replication_factor:3)"
+                + " RUN MODE sharding WITH REPLICATION STRATEGY (class: 'SimpleStrategy', replication_factor:1)"
                 + " PARAMETERS(nodes=7)";
+
+        sql = "CREATE DATABASE IF NOT EXISTS " + dbName + " RUN MODE client_server";
+        sql += " WITH ENDPOINT ASSIGNMENT STRATEGY (class: 'RandomEndpointAssignmentStrategy', assignment_factor: 1)";
+        // stmt.executeUpdate(sql);
+
+        sql = "CREATE DATABASE IF NOT EXISTS " + dbName + " RUN MODE sharding";
+        sql += " WITH REPLICATION STRATEGY (class: 'SimpleStrategy', replication_factor: 1)";
+        sql += " WITH ENDPOINT ASSIGNMENT STRATEGY (class: 'RandomEndpointAssignmentStrategy', assignment_factor: 3)";
         stmt.executeUpdate(sql);
+
         // stmt.executeUpdate("ALTER DATABASE ShardingTestDB1 RUN MODE client_server");
         // stmt.executeUpdate("CREATE DATABASE IF NOT EXISTS ShardingTestDB2 RUN MODE sharding
         // PARAMETERS(hostIds='1,2')");
 
-        new ShardingCrudTest(dbName).runTest();
+        // new ShardingCrudTest(dbName).runTest();
+
+        new ShardingFindTest(dbName).runTest();
     }
 
-    private class ShardingCrudTest extends SqlTestBase {
+    class ShardingFindTest extends SqlTestBase {
+
+        private final String name = "ShardingTest_Find";
+
+        public ShardingFindTest(String dbName) {
+            super(dbName);
+        }
+
+        @Override
+        protected void test() throws Exception {
+            createAndInsertTable();
+            testSelect();
+        }
+
+        void createAndInsertTable() {
+            executeUpdate("drop table IF EXISTS " + name);
+            executeUpdate("create table IF NOT EXISTS " + name + "(f1 int primary key, f2 int, f3 int)");
+            for (int i = 1; i <= 500; i++) {
+                executeUpdate("insert into " + name + "(f1, f2, f3) values(" + i + "," + i + "," + i + ")");
+            }
+        }
+
+        void testSelect() {
+            sql = "select * from " + name + " where f1 > 490";
+            printResultSet();
+            sql = "select count(*) from " + name + " where f1 > 490";
+            printResultSet();
+
+            sql = "select count(*) from " + name;
+            printResultSet();
+            sql = "select * from " + name + " where f1 = 3";
+            printResultSet();
+        }
+    }
+
+    class ShardingCrudTest extends SqlTestBase {
 
         public ShardingCrudTest(String dbName) {
             super(dbName);
@@ -57,10 +103,27 @@ public class ShardingTest extends SqlTestBase {
 
         @Override
         protected void test() throws Exception {
+            testPutRemote();
             insert();
             split();
             select();
             testMultiThread(dbName);
+        }
+
+        void testPutRemote() throws Exception {
+            String name = "ShardingTest_PutRemote";
+            executeUpdate("drop table IF EXISTS " + name);
+            executeUpdate("create table IF NOT EXISTS " + name + "(f1 int primary key, f2 int, f3 int)");
+            for (int i = 1; i < 500; i += 2) {
+                if (i == 67)
+                    continue;
+                executeUpdate("insert into " + name + "(f1, f2, f3) values(" + i + "," + i + "," + i + ")");
+            }
+
+            for (int i = 2; i < 500; i += 2) {
+                executeUpdate("insert into " + name + "(f1, f2, f3) values(" + i + "," + i + "," + i + ")");
+            }
+            executeUpdate("insert into " + name + "(f1, f2, f3) values(67,67,67)");
         }
 
         void insert() throws Exception {

@@ -6,8 +6,6 @@
  */
 package org.lealone.db.table;
 
-import java.io.ByteArrayInputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
@@ -21,7 +19,6 @@ import java.util.Map;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.MathUtils;
-import org.lealone.common.util.New;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Utils;
@@ -396,7 +393,7 @@ public class MetaTable extends Table {
             }
         }
 
-        ArrayList<Row> rows = New.arrayList();
+        ArrayList<Row> rows = Utils.newSmallArrayList();
         String catalog = identifier(database.getShortName());
         boolean admin = session.getUser().isAdmin();
         switch (type) {
@@ -628,11 +625,9 @@ public class MetaTable extends Table {
             add(rows, "MVCC", database.isMultiVersion() ? "TRUE" : "FALSE");
             add(rows, "QUERY_TIMEOUT", "" + session.getQueryTimeout());
             // database settings
-            ArrayList<String> settingNames = New.arrayList();
             Map<String, String> s = database.getSettings().getSettings();
-            for (String k : s.keySet()) {
-                settingNames.add(k);
-            }
+            ArrayList<String> settingNames = new ArrayList<>(s.size());
+            settingNames.addAll(s.keySet());
             Collections.sort(settingNames);
             for (String k : settingNames) {
                 add(rows, k, s.get(k));
@@ -680,10 +675,9 @@ public class MetaTable extends Table {
             break;
         }
         case HELP: {
-            String resource = "/org/lealone/res/help.csv";
+            String resource = Constants.RESOURCES_DIR + "help.csv";
             try {
-                byte[] data = Utils.getResource(resource);
-                Reader reader = new InputStreamReader(new ByteArrayInputStream(data));
+                Reader reader = Utils.getResourceAsReader(resource);
                 Csv csv = new Csv();
                 csv.setLineCommentCharacter('#');
                 ResultSet rs = csv.read(reader, null);
@@ -1511,7 +1505,7 @@ public class MetaTable extends Table {
 
     @Override
     public ArrayList<Index> getIndexes() {
-        ArrayList<Index> list = New.arrayList();
+        ArrayList<Index> list = new ArrayList<>(2);
         if (metaIndex == null) {
             return list;
         }

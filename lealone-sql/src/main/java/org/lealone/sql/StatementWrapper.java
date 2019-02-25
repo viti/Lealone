@@ -7,11 +7,9 @@ package org.lealone.sql;
 
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
-import org.lealone.api.DatabaseEventListener;
-import org.lealone.api.ErrorCode;
-import org.lealone.async.AsyncHandler;
-import org.lealone.async.AsyncResult;
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.trace.Trace;
 import org.lealone.common.util.MathUtils;
@@ -19,12 +17,18 @@ import org.lealone.db.CommandUpdateResult;
 import org.lealone.db.Constants;
 import org.lealone.db.Database;
 import org.lealone.db.ServerSession;
+import org.lealone.db.api.DatabaseEventListener;
+import org.lealone.db.api.ErrorCode;
+import org.lealone.db.async.AsyncHandler;
+import org.lealone.db.async.AsyncResult;
 import org.lealone.db.result.Result;
 import org.lealone.db.table.StandardTable;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.Parameter;
-import org.lealone.sql.router.RouterHolder;
+import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.router.SQLRouter;
+import org.lealone.storage.PageKey;
 
 /**
  * Represents a SQL statement wrapper.
@@ -32,7 +36,7 @@ import org.lealone.sql.router.RouterHolder;
  * @author H2 Group
  * @author zhh
  */
-class StatementWrapper extends StatementBase {
+public class StatementWrapper extends StatementBase {
 
     StatementBase statement;
 
@@ -51,15 +55,23 @@ class StatementWrapper extends StatementBase {
      */
     private volatile boolean cancel;
 
-    StatementWrapper(ServerSession session, StatementBase statement) {
+    public StatementWrapper(ServerSession session, StatementBase statement) {
         super(session);
         this.statement = statement;
         trace = session.getDatabase().getTrace(Trace.COMMAND);
     }
 
+    // ========================================== 只实现了以下方法 =============================================
+
     @Override
-    public Result getMetaData() {
-        return statement.getMetaData();
+    public PreparedStatement prepare() {
+        statement.prepare();
+        return this;
+    }
+
+    @Override
+    public PreparedStatement getWrappedStatement() {
+        return statement;
     }
 
     /**
@@ -67,17 +79,13 @@ class StatementWrapper extends StatementBase {
      *
      * @throws DbException if the statement has been canceled
      */
+
     @Override
     public void checkCanceled() {
         if (cancel) {
             cancel = false;
             throw DbException.get(ErrorCode.STATEMENT_WAS_CANCELED);
         }
-    }
-
-    @Override
-    public void close() {
-        statement.close();
     }
 
     @Override
@@ -91,159 +99,85 @@ class StatementWrapper extends StatementBase {
         return "StatementWrapper[" + statement.toString() + "]";
     }
 
-    /**
-     * Whether the command is already closed (in which case it can be re-used).
-     *
-     * @return true if it can be re-used
-     */
     @Override
-    public boolean canReuse() {
-        return statement.canReuse();
-    }
-
-    /**
-     * The command is now re-used, therefore reset the canReuse flag, and the
-     * parameter values.
-     */
-    @Override
-    public void reuse() {
-        statement.reuse();
+    public void replicationCommit(long validKey, boolean autoCommit) {
+        session.replicationCommit(validKey, autoCommit);
     }
 
     @Override
-    public boolean isCacheable() {
-        return statement.isCacheable();
+    public void replicationRollback() {
+        session.rollback();
     }
 
     @Override
-    public int getType() {
-        return statement.getType();
+    public Result executeQuery(int maxRows) {
+        return executeQuery(maxRows, false);
     }
 
     @Override
-    public boolean isBatch() {
-        return statement.isBatch();
+    public Result executeQuery(int maxRows, boolean scrollable) {
+        return executeQuery(maxRows, scrollable, null);
+    }
+
+    // scrollable参数被忽略了
+
+    @Override
+    public Result executeQuery(int maxRows, boolean scrollable, List<PageKey> pageKeys) {
+        return (Result) executeQuery0(maxRows, pageKeys, null);
     }
 
     @Override
-    public int hashCode() {
-        return statement.hashCode();
+    public void executeQueryAsync(int maxRows, boolean scrollable, AsyncHandler<AsyncResult<Result>> handler) {
+        executeQuery0(maxRows, null, handler);
     }
 
     @Override
-    public boolean needRecompile() {
-        return statement.needRecompile();
+    public void executeQueryAsync(int maxRows, boolean scrollable, List<PageKey> pageKeys,
+            AsyncHandler<AsyncResult<Result>> handler) {
+        executeQuery0(maxRows, pageKeys, handler);
     }
 
     @Override
-    public boolean equals(Object obj) {
-        return statement.equals(obj);
+    public int executeUpdate() {
+        return executeUpdate(null);
     }
 
     @Override
-    public void setParameterList(ArrayList<Parameter> parameters) {
-        statement.setParameterList(parameters);
+    public int executeUpdate(List<PageKey> pageKeys) {
+        return ((Integer) executeUpdate0(pageKeys, null)).intValue();
     }
 
     @Override
-    public ArrayList<Parameter> getParameters() {
-        return statement.getParameters();
+    public int executeUpdate(String replicationName, CommandUpdateResult commandUpdateResult) {
+        int updateCount = executeUpdate();
+        if (commandUpdateResult != null) {
+            commandUpdateResult.setUpdateCount(updateCount);
+            commandUpdateResult.addResult(this, session.getLastRowKey());
+        }
+        return updateCount;
     }
 
     @Override
-    public boolean isQuery() {
-        return statement.isQuery();
+    public void executeUpdateAsync(AsyncHandler<AsyncResult<Integer>> handler) {
+        executeUpdate0(null, handler);
     }
 
     @Override
-    public PreparedStatement prepare() {
-        statement.prepare();
-        return this;
+    public void executeUpdateAsync(List<PageKey> pageKeys, AsyncHandler<AsyncResult<Integer>> handler) {
+        executeUpdate0(pageKeys, handler);
     }
 
-    @Override
-    public void setSQL(String sql) {
-        statement.setSQL(sql);
+    private Object executeQuery0(int maxRows, List<PageKey> pageKeys, AsyncHandler<AsyncResult<Result>> queryHandler) {
+        return execute(null, queryHandler, pageKeys, maxRows, false);
     }
 
-    @Override
-    public String getSQL() {
-        return statement.getSQL();
-    }
-
-    @Override
-    public String getPlanSQL() {
-        return statement.getPlanSQL();
-    }
-
-    @Override
-    public void setObjectId(int i) {
-        statement.setObjectId(i);
-    }
-
-    @Override
-    public void setSession(ServerSession currentSession) {
-        statement.setSession(currentSession);
-    }
-
-    @Override
-    public void setPrepareAlways(boolean prepareAlways) {
-        statement.setPrepareAlways(prepareAlways);
-    }
-
-    @Override
-    public int getCurrentRowNumber() {
-        return statement.getCurrentRowNumber();
-    }
-
-    @Override
-    public boolean isLocal() {
-        return statement.isLocal();
-    }
-
-    @Override
-    public void setLocal(boolean local) {
-        statement.setLocal(local);
-    }
-
-    @Override
-    public int getFetchSize() {
-        return statement.getFetchSize();
-    }
-
-    @Override
-    public void setFetchSize(int fetchSize) {
-        statement.setFetchSize(fetchSize);
-    }
-
-    @Override
-    public ServerSession getSession() {
-        return statement.getSession();
-    }
-
-    @Override
-    public PreparedStatement getWrappedStatement() {
-        return statement;
-    }
-
-    @Override
-    public Result query(int maxRows) {
-        return statement.query(maxRows);
-    }
-
-    @Override
-    public Result query(int maxRows, boolean scrollable) {
-        return statement.query(maxRows, scrollable);
-    }
-
-    @Override
-    public int update() {
-        return statement.update();
+    private Object executeUpdate0(List<PageKey> pageKeys, AsyncHandler<AsyncResult<Integer>> updateHandler) {
+        return execute(updateHandler, null, pageKeys, 0, true);
     }
 
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    private Object execute(int maxRows, boolean isUpdate, AsyncHandler<AsyncResult<Integer>> updateHandler,
-            AsyncHandler<AsyncResult<Result>> queryHandler) {
+    private Object execute(AsyncHandler<AsyncResult<Integer>> updateHandler,
+            AsyncHandler<AsyncResult<Result>> queryHandler, List<PageKey> pageKeys, int maxRows, boolean isUpdate) {
         boolean async = (updateHandler != null) || (queryHandler != null);
         startTimeNanos = 0;
         long start = 0;
@@ -271,7 +205,11 @@ class StatementWrapper extends StatementBase {
                     int rowCount;
                     if (isUpdate) {
                         session.setLastScopeIdentity(ValueNull.INSTANCE);
-                        int updateCount = RouterHolder.getRouter().executeUpdate(statement);
+                        int updateCount;
+                        if (pageKeys == null)
+                            updateCount = SQLRouter.executeUpdate(statement);
+                        else
+                            updateCount = statement.executeUpdate(pageKeys);
                         rowCount = updateCount;
                         if (updateHandler != null) {
                             AsyncResult<Integer> ar = new AsyncResult<>();
@@ -280,7 +218,11 @@ class StatementWrapper extends StatementBase {
                         }
                         result = Integer.valueOf(updateCount);
                     } else {
-                        Result r = RouterHolder.getRouter().executeQuery(statement, maxRows);
+                        Result r;
+                        if (pageKeys == null)
+                            r = SQLRouter.executeQuery(statement, maxRows);
+                        else
+                            r = statement.executeQuery(maxRows, false, pageKeys);
                         rowCount = r.getRowCount();
                         result = r;
                         if (queryHandler != null) {
@@ -440,43 +382,190 @@ class StatementWrapper extends StatementBase {
         }
     }
 
+    // ========================================== 以下方法只是简单的委派 =============================================
+
     @Override
-    public Result executeQuery(int maxRows) {
-        return (Result) execute(maxRows, false, null, null);
+    public int hashCode() {
+        return statement.hashCode();
     }
 
     @Override
-    public void executeQueryAsync(int maxRows, boolean scrollable, AsyncHandler<AsyncResult<Result>> handler) {
-        execute(0, false, null, handler);
+    public boolean isLocal() {
+        return statement.isLocal();
     }
 
     @Override
-    public int executeUpdate() {
-        return ((Integer) execute(0, true, null, null)).intValue();
+    public void setLocal(boolean local) {
+        statement.setLocal(local);
     }
 
     @Override
-    public void executeUpdateAsync(AsyncHandler<AsyncResult<Integer>> handler) {
-        execute(0, true, handler, null);
+    public int getFetchSize() {
+        return statement.getFetchSize();
     }
 
     @Override
-    public int executeUpdate(String replicationName, CommandUpdateResult commandUpdateResult) {
-        int updateCount = executeUpdate();
-        if (commandUpdateResult != null) {
-            commandUpdateResult.setUpdateCount(updateCount);
-            commandUpdateResult.addResult(this, session.getLastRowKey());
-        }
-        return updateCount;
+    public void setFetchSize(int fetchSize) {
+        statement.setFetchSize(fetchSize);
     }
 
     @Override
-    public void replicationCommit(long validKey, boolean autoCommit) {
-        session.replicationCommit(validKey, autoCommit);
+    public Result getMetaData() {
+        return statement.getMetaData();
     }
 
     @Override
-    public void replicationRollback() {
-        session.rollback();
+    public int getType() {
+        return statement.getType();
+    }
+
+    @Override
+    public boolean needRecompile() {
+        return statement.needRecompile();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return statement.equals(obj);
+    }
+
+    @Override
+    public void setParameterList(ArrayList<Parameter> parameters) {
+        statement.setParameterList(parameters);
+    }
+
+    @Override
+    public ArrayList<Parameter> getParameters() {
+        return statement.getParameters();
+    }
+
+    @Override
+    public boolean isQuery() {
+        return statement.isQuery();
+    }
+
+    @Override
+    public Result query(int maxRows) {
+        return statement.query(maxRows);
+    }
+
+    @Override
+    public Result query(int maxRows, boolean scrollable) {
+        return statement.query(maxRows, scrollable);
+    }
+
+    @Override
+    public int update() {
+        return statement.update();
+    }
+
+    @Override
+    public int update(String replicationName) {
+        return statement.update(replicationName);
+    }
+
+    @Override
+    public void setSQL(String sql) {
+        statement.setSQL(sql);
+    }
+
+    @Override
+    public String getSQL() {
+        return statement.getSQL();
+    }
+
+    @Override
+    public String getPlanSQL() {
+        return statement.getPlanSQL();
+    }
+
+    @Override
+    public void setObjectId(int i) {
+        statement.setObjectId(i);
+    }
+
+    @Override
+    public void setSession(ServerSession currentSession) {
+        statement.setSession(currentSession);
+    }
+
+    @Override
+    public void setPrepareAlways(boolean prepareAlways) {
+        statement.setPrepareAlways(prepareAlways);
+    }
+
+    @Override
+    public int getCurrentRowNumber() {
+        return statement.getCurrentRowNumber();
+    }
+
+    @Override
+    public boolean isCacheable() {
+        return statement.isCacheable();
+    }
+
+    @Override
+    public ServerSession getSession() {
+        return statement.getSession();
+    }
+
+    @Override
+    public boolean canReuse() {
+        return statement.canReuse();
+    }
+
+    @Override
+    public void reuse() {
+        statement.reuse();
+    }
+
+    @Override
+    public void close() {
+        statement.close();
+    }
+
+    @Override
+    public double getCost() {
+        return statement.getCost();
+    }
+
+    @Override
+    public int getPriority() {
+        return statement.getPriority();
+    }
+
+    @Override
+    public void setPriority(int priority) {
+        statement.setPriority(priority);
+    }
+
+    @Override
+    public boolean isDDL() {
+        return statement.isDDL();
+    }
+
+    @Override
+    public boolean isDatabaseStatement() {
+        return statement.isDatabaseStatement();
+    }
+
+    @Override
+    public boolean isReplicationStatement() {
+        return statement.isReplicationStatement();
+    }
+
+    @Override
+    public TableFilter getTableFilter() {
+        return statement.getTableFilter();
+    }
+
+    @Override
+    public Map<String, List<PageKey>> getEndpointToPageKeyMap() {
+        return statement.getEndpointToPageKeyMap();
+    }
+
+    @Override
+    public String getPlanSQL(boolean isDistributed) {
+        return statement.getPlanSQL(isDistributed);
     }
 }
